@@ -839,7 +839,6 @@ export class SessionManager {
   }
 
   private async applyRimeState(state: RimeState, previousState?: RimeState): Promise<void> {
-    await this.syncPreviewText(state.composingText);
     if (state.commitText.length > 0 && this.editorAdapter) {
       if (previousState && previousState.rawInput.length > 0) {
         this.pendingRollback = {
@@ -848,10 +847,13 @@ export class SessionManager {
           schemaId: previousState.schemaId.length > 0 ? previousState.schemaId : state.schemaId
         };
       }
+      // Drop any active preedit preview first so the stale pinyin letters are
+      // not finalized into the editor alongside the real commit text.
       await this.clearCurrentPreview();
       await this.editorAdapter.insertText(state.commitText);
       this.trackCommittedText(state.commitText);
     }
+    await this.syncPreviewText(state.composingText);
     this.updateCandidateState(state);
     this.syncNineKeyStateFromRawInput(state.rawInput);
     keyboardStateStore.patch({
@@ -861,7 +863,6 @@ export class SessionManager {
   }
 
   private async applyEnglishState(state: EnglishEngineState): Promise<void> {
-    await this.syncPreviewText(state.composingText);
     if (state.commitText.length > 0 && this.editorAdapter) {
       await this.clearCurrentPreview();
       let inserted = await this.editorAdapter.insertText(state.commitText);
@@ -869,6 +870,7 @@ export class SessionManager {
         this.trackCommittedText(state.commitText);
       }
     }
+    await this.syncPreviewText(state.composingText);
     this.updateEnglishCandidateState(state);
     this.syncNineKeyState(this.nineKeyEngine.reset());
     keyboardStateStore.patch({

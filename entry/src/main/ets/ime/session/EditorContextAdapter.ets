@@ -109,6 +109,19 @@ export class EditorContextAdapter {
       return;
     }
     try {
+      // If preview is currently active, first overwrite it with empty text so
+      // finishTextPreview() does not commit the leftover preedit (e.g. pinyin
+      // letters) into the editor before the real commit text is inserted.
+      if (this.previewActive) {
+        let range: inputMethodEngine.Range = {
+          start: this.previewStart,
+          end: this.previewEnd
+        };
+        try {
+          await this.inputClient.setPreviewText('', range);
+        } catch (_) {
+        }
+      }
       await this.inputClient.finishTextPreview();
     } catch (_) {
     } finally {
