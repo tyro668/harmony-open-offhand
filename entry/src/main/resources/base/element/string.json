@@ -2,15 +2,39 @@
   "string": [
     {
       "name": "module_desc",
-      "value": "module description"
+      "value": "HarmonyOS native IME module"
     },
     {
       "name": "EntryAbility_desc",
-      "value": "description"
+      "value": "Offhand bootstrap ability"
     },
     {
       "name": "EntryAbility_label",
-      "value": "label"
+      "value": "Offhand"
+    },
+    {
+      "name": "ime_name",
+      "value": "Offhand Input"
+    },
+    {
+      "name": "ime_desc",
+      "value": "Offhand HarmonyOS native input method extension"
+    },
+    {
+      "name": "perm_reason_internet",
+      "value": "Used to connect to cloud polish and configuration services."
+    },
+    {
+      "name": "perm_reason_network_info",
+      "value": "Used to detect network state and gracefully degrade smart features."
+    },
+    {
+      "name": "perm_reason_microphone",
+      "value": "Used when voice input is enabled from the keyboard."
+    },
+    {
+      "name": "perm_reason_keep_bg",
+      "value": "Used to keep voice recognition sessions stable during long dictation."
     }
   ]
 }

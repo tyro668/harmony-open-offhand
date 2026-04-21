@@ -1,0 +1,7 @@
+if(TARGET yaml-cpp)
+  set(YamlCpp_FOUND TRUE)
+  set(YamlCpp_INCLUDE_PATH "${OFFHAND_LIBRIME_ROOT}/deps/yaml-cpp/include")
+  set(YamlCpp_LIBRARY yaml-cpp)
+else()
+  set(YamlCpp_FOUND FALSE)
+endif()

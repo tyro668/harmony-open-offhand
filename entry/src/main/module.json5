@@ -10,6 +10,49 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    "requestPermissions": [
+      {
+        "name": "ohos.permission.INTERNET",
+        "reason": "$string:perm_reason_internet",
+        "usedScene": {
+          "abilities": [
+            "OffhandInputMethodExtAbility"
+          ],
+          "when": "always"
+        }
+      },
+      {
+        "name": "ohos.permission.GET_NETWORK_INFO",
+        "reason": "$string:perm_reason_network_info",
+        "usedScene": {
+          "abilities": [
+            "OffhandInputMethodExtAbility"
+          ],
+          "when": "always"
+        }
+      },
+      {
+        "name": "ohos.permission.MICROPHONE",
+        "reason": "$string:perm_reason_microphone",
+        "usedScene": {
+          "abilities": [
+            "OffhandInputMethodExtAbility",
+            "EntryAbility"
+          ],
+          "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.KEEP_BACKGROUND_RUNNING",
+        "reason": "$string:perm_reason_keep_bg",
+        "usedScene": {
+          "abilities": [
+            "OffhandInputMethodExtAbility"
+          ],
+          "when": "inuse"
+        }
+      }
+    ],
     "abilities": [
       {
         "name": "EntryAbility",
@@ -33,6 +76,21 @@
       }
     ],
     "extensionAbilities": [
+      {
+        "name": "OffhandInputMethodExtAbility",
+        "srcEntry": "./ets/ime/ability/OffhandInputMethodExtensionAbility.ets",
+        "type": "inputMethod",
+        "description": "$string:ime_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:ime_name",
+        "exported": true,
+        "metadata": [
+          {
+            "name": "ohos.extension.input_method",
+            "resource": "$profile:input_method_config"
+          }
+        ]
+      },
       {
         "name": "EntryBackupAbility",
         "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",

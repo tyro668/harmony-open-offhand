@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "app": {
+    "bundleName": "com.opensource.harmony.offhand",
+    "defaultSubtypeId": "zh-Hans-pinyin",
+    "enableCloudFeaturesByDefault": false,
+    "maxConcurrentSessions": 1
+  },
+  "input": {
+    "candidatePageSize": 8,
+    "maxCompositionLength": 64,
+    "commitOnSpace": true,
+    "enablePreviewText": true
+  },
+  "pinyin": {
+    "engine": "librime",
+    "rime": {
+      "schemaId": "offhand_pinyin",
+      "sharedDataDir": "<app_private>/rime/shared",
+      "userDataDir": "<app_private>/rime/user",
+      "preloadSchemas": [
+        "offhand_pinyin"
+      ],
+      "options": {
+        "ascii_mode": false,
+        "full_shape": false
+      }
+    }
+  },
+  "voice": {
+    "enabled": true,
+    "sampleRate": 16000,
+    "maxRecordSeconds": 45,
+    "requestTimeoutMs": 20000,
+    "asrEndpoint": "",
+    "autoInsertResult": false,
+    "autoPolishResult": true,
+    "mockTranscript": "这是一次语音输入示例"
+  },
+  "llmPolish": {
+    "enabled": true,
+    "endpoint": "",
+    "requestTimeoutMs": 12000,
+    "autoPolishVoiceResult": true,
+    "fallbackToLocalRewrite": true,
+    "style": "clean_conversational"
+  },
+  "privacy": {
+    "enablePersonalization": true
+  }
+}

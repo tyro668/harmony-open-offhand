@@ -1,0 +1,42 @@
+{
+  "subtypes": [
+    {
+      "id": "zh-Hans-pinyin",
+      "name": "Offhand",
+      "label": "中文拼音",
+      "mode": "lower",
+      "locale": "zh-CN",
+      "language": "zh",
+      "extra": {
+        "engine": "librime",
+        "keyboardLayout": "qwerty_26",
+        "schemaId": "offhand_pinyin"
+      }
+    },
+    {
+      "id": "en-US-qwerty",
+      "name": "Offhand",
+      "label": "English",
+      "mode": "lower",
+      "locale": "en-US",
+      "language": "en",
+      "extra": {
+        "engine": "local_english",
+        "keyboardLayout": "qwerty_26"
+      }
+    },
+    {
+      "id": "zh-CN-voice",
+      "name": "Offhand",
+      "label": "语音输入",
+      "mode": "lower",
+      "locale": "zh-CN",
+      "language": "zh",
+      "extra": {
+        "engine": "librime",
+        "keyboardLayout": "voice_panel",
+        "schemaId": "offhand_pinyin"
+      }
+    }
+  ]
+}

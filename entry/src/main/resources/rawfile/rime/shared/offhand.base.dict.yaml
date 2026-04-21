@@ -1,0 +1,12 @@
+# Minimal dictionary used by the native stub and future real librime deploy.
+---
+name: offhand.base
+version: "0.1"
+sort: by_weight
+use_preset_vocabulary: false
+...
+你好	ni hao	100
+输入法	shu ru fa	80
+鸿蒙	hong meng	80
+语音	yu yin	70
+润色	run se	60

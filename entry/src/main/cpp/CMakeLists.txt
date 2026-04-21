@@ -1,0 +1,97 @@
+# the minimum version of CMake.
+cmake_minimum_required(VERSION 3.5.0)
+project(entry LANGUAGES C CXX)
+
+set(NATIVE_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR})
+set(OFFHAND_THIRD_PARTY_ROOT ${NATIVE_ROOT_PATH}/third_party)
+set(OFFHAND_BOOST_ROOT ${OFFHAND_THIRD_PARTY_ROOT}/boost)
+set(OFFHAND_LIBRIME_ROOT ${OFFHAND_THIRD_PARTY_ROOT}/librime)
+set(OFFHAND_OPENCC_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/third_party/opencc)
+
+if(DEFINED PACKAGE_FIND_FILE)
+    include(${PACKAGE_FIND_FILE})
+endif()
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_compile_options(
+    -Wno-unused-command-line-argument
+    -Wno-deprecated-declarations
+)
+
+list(PREPEND CMAKE_MODULE_PATH
+    ${NATIVE_ROOT_PATH}/cmake
+    ${OFFHAND_LIBRIME_ROOT}/cmake
+)
+list(PREPEND CMAKE_INCLUDE_PATH
+    ${NATIVE_ROOT_PATH}/compat
+)
+
+include_directories(
+    ${NATIVE_ROOT_PATH}
+    ${NATIVE_ROOT_PATH}/rime
+    ${NATIVE_ROOT_PATH}/compat
+    ${OFFHAND_BOOST_ROOT}
+    ${OFFHAND_LIBRIME_ROOT}/include
+    ${OFFHAND_LIBRIME_ROOT}/src
+)
+
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_DATA OFF CACHE BOOL "" FORCE)
+set(BUILD_SAMPLE OFF CACHE BOOL "" FORCE)
+set(BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(BUILD_MERGED_PLUGINS ON CACHE BOOL "" FORCE)
+set(BUILD_SEPARATE_LIBS OFF CACHE BOOL "" FORCE)
+set(ENABLE_EXTERNAL_PLUGINS OFF CACHE BOOL "" FORCE)
+set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
+set(ENABLE_THREADING OFF CACHE BOOL "" FORCE)
+set(ENABLE_TIMESTAMP OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+set(LEVELDB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LEVELDB_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(LEVELDB_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
+set(ENABLE_GTEST OFF CACHE BOOL "" FORCE)
+set(ENABLE_BENCHMARK OFF CACHE BOOL "" FORCE)
+set(ENABLE_DARTS OFF CACHE BOOL "" FORCE)
+set(BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+set(USE_SYSTEM_MARISA OFF CACHE BOOL "" FORCE)
+set(USE_SYSTEM_RAPIDJSON OFF CACHE BOOL "" FORCE)
+set(USE_SYSTEM_TCLAP OFF CACHE BOOL "" FORCE)
+
+add_subdirectory(
+    ${OFFHAND_LIBRIME_ROOT}/deps/yaml-cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/yaml-cpp
+)
+add_subdirectory(
+    ${OFFHAND_LIBRIME_ROOT}/deps/leveldb
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/leveldb
+)
+add_subdirectory(
+    ${OFFHAND_LIBRIME_ROOT}/deps/opencc
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/opencc
+)
+add_subdirectory(
+    ${OFFHAND_LIBRIME_ROOT}
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/librime
+)
+
+add_library(entry SHARED
+    napi_init.cpp
+    rime/RimeBridge.cpp
+    rime/RimeSession.cpp
+)
+
+target_link_libraries(entry PUBLIC
+    libace_napi.z.so
+    yaml-cpp
+    leveldb
+    marisa
+    libopencc
+    rime-static
+)

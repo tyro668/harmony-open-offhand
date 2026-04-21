@@ -1,0 +1,7 @@
+if(TARGET marisa)
+  set(Marisa_FOUND TRUE)
+  set(Marisa_INCLUDE_PATH "${OFFHAND_LIBRIME_ROOT}/deps/opencc/deps/marisa-0.2.6/include")
+  set(Marisa_LIBRARY marisa)
+else()
+  set(Marisa_FOUND FALSE)
+endif()

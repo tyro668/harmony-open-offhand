@@ -1,0 +1,7 @@
+if(TARGET leveldb)
+  set(LevelDb_FOUND TRUE)
+  set(LevelDb_INCLUDE_PATH "${OFFHAND_LIBRIME_ROOT}/deps/leveldb/include")
+  set(LevelDb_LIBRARY leveldb)
+else()
+  set(LevelDb_FOUND FALSE)
+endif()

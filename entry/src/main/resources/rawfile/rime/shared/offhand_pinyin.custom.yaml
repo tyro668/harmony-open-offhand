@@ -1,0 +1,3 @@
+# Runtime patch placeholder for future deploy customization.
+patch:
+  menu/page_size: 8

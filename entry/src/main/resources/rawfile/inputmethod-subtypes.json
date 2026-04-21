@@ -1,0 +1,70 @@
+[
+  {
+    "id": "zh-Hans-pinyin",
+    "name": "中文拼音",
+    "locale": "zh-CN",
+    "language": "zh",
+    "mode": "lower",
+    "engine": "librime",
+    "schemaId": "offhand_pinyin",
+    "keyboardLayout": "qwerty_26",
+    "voiceEnabled": true,
+    "llmPolishEnabled": true,
+    "domainHints": [
+      "general",
+      "chat",
+      "office"
+    ],
+    "extra": {
+      "punctuationMode": "zh",
+      "supportedKeyboardLayouts": [
+        "qwerty_26",
+        "t9_9"
+      ]
+    }
+  },
+  {
+    "id": "en-US-qwerty",
+    "name": "English",
+    "locale": "en-US",
+    "language": "en",
+    "mode": "lower",
+    "engine": "local_english",
+    "keyboardLayout": "qwerty_26",
+    "voiceEnabled": false,
+    "llmPolishEnabled": false,
+    "domainHints": [
+      "general",
+      "email",
+      "code"
+    ],
+    "extra": {
+      "autoCapitalize": true,
+      "supportedKeyboardLayouts": [
+        "qwerty_26"
+      ]
+    }
+  },
+  {
+    "id": "zh-CN-voice",
+    "name": "语音输入",
+    "locale": "zh-CN",
+    "language": "zh",
+    "mode": "lower",
+    "engine": "librime",
+    "schemaId": "offhand_pinyin",
+    "keyboardLayout": "voice_panel",
+    "voiceEnabled": true,
+    "llmPolishEnabled": true,
+    "domainHints": [
+      "chat",
+      "meeting"
+    ],
+    "extra": {
+      "partialResult": true,
+      "supportedKeyboardLayouts": [
+        "voice_panel"
+      ]
+    }
+  }
+]
