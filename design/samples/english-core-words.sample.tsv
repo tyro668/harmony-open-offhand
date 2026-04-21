@@ -1,0 +1,11 @@
+token	lemma	weight	class	variants	source
+hello	hello	9800	interjection	helo;base	base
+meeting	meeting	9600	noun	meetings	base
+schedule	schedule	9550	noun	scheduled;schedules	base
+update	update	9520	verb	updated;updating	base
+review	review	9480	verb	reviewed;reviewing	base
+thanks	thanks	9420	expression	thank;base	base
+HarmonyOS	harmonyos	9380	proper_noun	harmony	os	base
+keyboard	keyboard	9320	noun	keyboards	base
+polish	polish	9250	verb	polished;polishing	base
+summary	summary	9200	noun	summaries	base

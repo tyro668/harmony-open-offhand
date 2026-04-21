@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "scenes": {
+    "chat": {
+      "defaultMode": "light",
+      "allowAutoSuggestion": true,
+      "preserveEmoji": true,
+      "preserveLineBreaks": true,
+      "temperature": 0.2
+    },
+    "office": {
+      "defaultMode": "formal",
+      "allowAutoSuggestion": true,
+      "preserveEmoji": false,
+      "preserveLineBreaks": true,
+      "temperature": 0.1
+    },
+    "note": {
+      "defaultMode": "clear",
+      "allowAutoSuggestion": true,
+      "preserveEmoji": false,
+      "preserveLineBreaks": true,
+      "temperature": 0.15
+    },
+    "email": {
+      "enabled": false
+    },
+    "url": {
+      "enabled": false
+    },
+    "password": {
+      "enabled": false
+    }
+  },
+  "modePrompts": {
+    "light": "去除口头语和重复表达，保留原意，最小改动。",
+    "formal": "将文本改写为更正式、更稳重的书面表达，保持事实不变。",
+    "clear": "压缩冗余表达，让句子更清楚直接。",
+    "friendly": "让语气更自然亲和，但不要夸张。"
+  },
+  "guardrails": {
+    "preserveNumbers": true,
+    "preserveNamedEntities": true,
+    "forbidFactInjection": true,
+    "forbidSummaryInsteadOfRewrite": true
+  }
+}

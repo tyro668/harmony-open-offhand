@@ -1,0 +1,11 @@
+term	pinyin	pinyin_abbr	weight	pos	domain	flags	source
+你好	ni hao	nh	9880	greeting	general	common|spoken	base
+我们	wo men	wm	9750	pronoun	general	common	base
+输入法	shu ru fa	srf	9600	noun	tech	common	base
+鸿蒙	hong meng	hm	9550	proper_noun	tech	brand	base
+语音输入	yu yin shu ru	yysr	9500	noun	general	voice	base
+大模型	da mo xing	dmx	9350	noun	ai	common	base
+会议纪要	hui yi ji yao	hyjy	9200	noun	office	office	base
+麻烦你再看一下	ma fan ni zai kan yi xia	mfnzkyx	9050	phrase	chat	spoken	base
+今天下午三点	jin tian xia wu san dian	jtxwsd	9000	time	general	time	base
+项目负责人	xiang mu fu ze ren	xmfzr	8920	noun	office	role	base

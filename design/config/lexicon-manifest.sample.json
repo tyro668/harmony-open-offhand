@@ -1,0 +1,55 @@
+{
+  "version": "2026.04.21",
+  "baseUri": "https://cdn.example.com/offhand/lexicon/",
+  "packages": [
+    {
+      "name": "rime_shared_core",
+      "version": "1.0.0",
+      "file": "rime_shared_core.zip",
+      "checksum": "sha256:rime_shared_core_demo",
+      "license": "BSD-3-Clause + project-local",
+      "required": true
+    },
+    {
+      "name": "offhand_schema",
+      "version": "1.0.0",
+      "file": "offhand_schema.zip",
+      "checksum": "sha256:offhand_schema_demo",
+      "license": "project-local",
+      "required": true
+    },
+    {
+      "name": "core_english",
+      "version": "1.0.0",
+      "file": "core_english.bin",
+      "checksum": "sha256:core_english_demo",
+      "required": true
+    },
+    {
+      "name": "asr_bias",
+      "version": "1.0.0",
+      "file": "asr_bias.jsonl",
+      "checksum": "sha256:asr_bias_demo",
+      "required": false
+    },
+    {
+      "name": "office_domain_rime_dict",
+      "version": "1.0.0",
+      "file": "offhand.domain.office.dict.yaml",
+      "checksum": "sha256:office_domain_demo",
+      "required": false
+    },
+    {
+      "name": "hotword_rime_patch",
+      "version": "1.0.0",
+      "file": "offhand.hotword.dict.yaml",
+      "checksum": "sha256:hotword_rime_patch_demo",
+      "required": false
+    }
+  ],
+  "updatePolicy": {
+    "wifiOnly": true,
+    "allowRollback": true,
+    "maxRetainedVersions": 2
+  }
+}

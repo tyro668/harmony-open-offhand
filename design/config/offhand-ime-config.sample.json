@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "app": {
+    "bundleName": "com.opensource.harmony.offhand",
+    "defaultSubtypeId": "zh-Hans-pinyin",
+    "enableCloudFeaturesByDefault": false,
+    "maxConcurrentSessions": 1
+  },
+  "input": {
+    "candidatePageSize": 12,
+    "maxCompositionLength": 64,
+    "commitOnSpace": true,
+    "enablePreviewText": true,
+    "enableHaptics": true,
+    "enableKeySound": false,
+    "longPressRepeatDelete": true
+  },
+  "pinyin": {
+    "engine": "librime",
+    "enablePrediction": true,
+    "enableMixedInput": true,
+    "enableFuzzy": true,
+    "fuzzyPairs": [
+      ["z", "zh"],
+      ["c", "ch"],
+      ["s", "sh"],
+      ["an", "ang"],
+      ["en", "eng"],
+      ["in", "ing"],
+      ["l", "n"]
+    ],
+    "enableDoublePinyin": false,
+    "doublePinyinSchema": "none",
+    "topCandidateAutoCommitMinLen": 2,
+    "rime": {
+      "versionLine": "validated-stable-release",
+      "sharedDataDir": "resources/base/rawfile/rime/shared",
+      "userDataDir": "<app_private>/rime",
+      "schemaId": "offhand_pinyin",
+      "fallbackSchemaId": "luna_pinyin_simp",
+      "preloadSchemas": [
+        "offhand_pinyin"
+      ],
+      "syncUserDataOnBackground": true,
+      "options": {
+        "ascii_mode": false,
+        "emoji_suggestion": true,
+        "full_shape": false
+      }
+    }
+  },
+  "english": {
+    "enableAutoCapitalize": true,
+    "enableAutoCorrect": true,
+    "enablePhrasePrediction": true,
+    "doubleSpacePeriod": true,
+    "programmerModeEnabled": false
+  },
+  "voice": {
+    "enabled": true,
+    "provider": "coreSpeechKit",
+    "mode": "online",
+    "defaultLocale": "zh-CN",
+    "audio": {
+      "audioType": "pcm",
+      "sampleRate": 16000,
+      "soundChannel": 1,
+      "sampleBit": 16,
+      "chunkBytes": 1280
+    },
+    "showPartialResult": true,
+    "autoSuggestPolishAfterFinal": true
+  },
+  "llmPolish": {
+    "enabled": true,
+    "triggerMode": "manual_or_voice_commit",
+    "defaultMode": "light",
+    "timeoutMs": 1200,
+    "retry": 1,
+    "maxTextLength": 500,
+    "showDiffPreview": true,
+    "replaceAfterUserConfirm": true,
+    "server": {
+      "baseUrl": "https://ime.example.com",
+      "path": "/v1/ime/polish",
+      "connectTimeoutMs": 500,
+      "readTimeoutMs": 1200
+    },
+    "safety": {
+      "disableInSecurityModeFull": true,
+      "disableInPasswordFields": true,
+      "disableInOtpFields": true,
+      "disableInUrlFields": true,
+      "disableInEmailFields": true
+    }
+  },
+  "privacy": {
+    "enablePersonalization": true,
+    "retainUserLearningDays": 180,
+    "encryptUserDictionary": true,
+    "allowCrashLogTextSample": false
+  },
+  "sync": {
+    "enableUserDictionarySync": false,
+    "enableHotLexiconUpdate": true,
+    "wifiOnlyUpdate": true
+  },
+  "experiments": {
+    "enableDomainLexicon": true,
+    "enableVoiceBiasLexicon": true,
+    "enableFormalPolishShortcut": true
+  }
+}

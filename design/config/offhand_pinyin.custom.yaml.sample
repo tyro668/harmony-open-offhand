@@ -1,0 +1,7 @@
+patch:
+  menu/page_size: 9
+  translator/enable_sentence: true
+  translator/enable_completion: true
+  speller/max_code_length: 32
+  switches/@0/reset: 0
+  switches/@1/reset: 1
