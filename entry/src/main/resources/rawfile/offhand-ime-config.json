@@ -10,10 +10,22 @@
     "candidatePageSize": 8,
     "maxCompositionLength": 64,
     "commitOnSpace": true,
-    "enablePreviewText": true
+    "enablePreviewText": false
   },
   "pinyin": {
     "engine": "librime",
+    "enablePrediction": true,
+    "enableMixedInput": true,
+    "enableFuzzy": true,
+    "fuzzyPairs": [
+      ["z", "zh"],
+      ["c", "ch"],
+      ["s", "sh"],
+      ["an", "ang"],
+      ["en", "eng"],
+      ["in", "ing"],
+      ["l", "n"]
+    ],
     "rime": {
       "schemaId": "offhand_pinyin",
       "sharedDataDir": "<app_private>/rime/shared",
@@ -23,7 +35,8 @@
       ],
       "options": {
         "ascii_mode": false,
-        "full_shape": false
+        "full_shape": false,
+        "emoji_suggestion": true
       }
     }
   },

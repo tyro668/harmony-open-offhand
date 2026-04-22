@@ -26,12 +26,34 @@ interface SubtypeEnvelope {
 }
 
 const RIME_SHARED_RAWFILE_ROOT = 'rime/shared';
+// Bumped after 2026-04-22 fix that: (1) pre-simplifies essay.txt so candidates
+// no longer rely on opencc/simplifier (opencc data files are not shipped);
+// (2) drops the broken `simplifier` filter from the schema; (3) expands
+// offhand.base.dict.yaml with high-weight common phrases (季节/集结/...).
+const RIME_RESOURCE_VERSION = '20260422-simp-vocab-v5';
 const RIME_SHARED_FILES: string[] = [
   'default.yaml',
+  'pinyin.yaml',
+  'offhand_pinyin.dict.yaml',
   'offhand_pinyin.schema.yaml',
   'offhand_pinyin.custom.yaml',
+  'offhand.base.dict.yaml',
   'luna_pinyin.dict.yaml',
   'essay.txt'
+];
+
+const DEFAULT_SPELLER_ALGEBRA: string[] = [
+  'erase/^xx$/',
+  'abbrev/^([a-z]).+$/$1/',
+  'abbrev/^([zcs]h).+$/$1/',
+  'derive/^([nl])ve$/$1ue/',
+  'derive/^([jqxy])u/$1v/',
+  'derive/un$/uen/',
+  'derive/ui$/uei/',
+  'derive/iu$/iou/',
+  'derive/([aeiou])ng$/$1gn/',
+  'derive/ong$/on/',
+  'derive/ao$/oa/'
 ];
 
 export class ConfigRepository {
@@ -42,7 +64,7 @@ export class ConfigRepository {
   private runtimeSettings: OffhandRuntimeSettings = createDefaultRuntimeSettings();
   private subtypes: OffhandSubtypeConfig[] = createDefaultSubtypes();
   private initialized: boolean = false;
-  private preparedSharedDataDir: string = '';
+  private lastPreparedSignature: string = '';
 
   async initialize(context: InputMethodExtensionContext): Promise<void> {
     this.baseConfig = await this.loadJsonResource<OffhandImeConfig>(context, 'offhand-ime-config.json', createDefaultConfig());
@@ -113,14 +135,29 @@ export class ConfigRepository {
     let rime = this.config.pinyin.rime;
     let sharedDataDir = resolveAppPrivatePath(rime.sharedDataDir, context.filesDir, 'rime/shared');
     let userDataDir = resolveAppPrivatePath(rime.userDataDir, context.filesDir, 'rime/user');
-    await this.prepareRimeSharedData(context, sharedDataDir);
     ensureDirectory(userDataDir);
+    let signature = `${sharedDataDir}|${userDataDir}|${buildRimeResourceSignature(this.config)}`;
+    // Only copy the shared data and wipe prebuilt/staging when the resource
+    // signature actually changed. Re-running these steps on every re-focus
+    // erased the `.table.bin`/`.prism.bin` produced by a previous deploy —
+    // Rime's in-memory dictionary would keep working for the warm session,
+    // but the next cold start would be left with an empty `build/` directory
+    // and a flag cache indicating "already deployed", so phrase candidates
+    // (e.g. 季节/集结 for `jijie`) silently disappeared.
+    if (this.lastPreparedSignature !== signature) {
+      await this.prepareRimeSharedData(context, sharedDataDir);
+      resetDirectoryContents(`${sharedDataDir}/build`);
+      resetDirectoryContents(`${userDataDir}/build`);
+      removeRecursively(`${userDataDir}/installation.yaml`);
+      this.lastPreparedSignature = signature;
+    }
     let options: RimeOptionState = cloneOptionState(rime.options);
     let initOptions: RimeInitOptions = {
       sharedDataDir: sharedDataDir,
       userDataDir: userDataDir,
       schemaId: rime.schemaId,
-      options: options
+      options: options,
+      resourceVersion: buildRimeResourceSignature(this.config)
     };
     return initOptions;
   }
@@ -141,18 +178,15 @@ export class ConfigRepository {
   }
 
   private async prepareRimeSharedData(context: InputMethodExtensionContext, targetDir: string): Promise<void> {
-    if (this.preparedSharedDataDir === targetDir) {
-      return;
-    }
     ensureDirectory(targetDir);
     for (let index = 0; index < RIME_SHARED_FILES.length; index++) {
       let fileName = RIME_SHARED_FILES[index];
-      let rawPath = `${RIME_SHARED_RAWFILE_ROOT}/${fileName}`;
       let targetPath = `${targetDir}/${fileName}`;
+      let rawPath = `${RIME_SHARED_RAWFILE_ROOT}/${fileName}`;
       let content = await context.resourceManager.getRawFileContent(rawPath);
-      writeBinaryFile(targetPath, content);
+      writeUtf8ResourceFile(targetPath, this.decoder.decodeToString(content));
     }
-    this.preparedSharedDataDir = targetDir;
+    writeTextFile(`${targetDir}/offhand_pinyin.custom.yaml`, buildRimeCustomPatch(this.config));
   }
 }
 
@@ -167,11 +201,12 @@ function createDefaultConfig(): OffhandImeConfig {
     candidatePageSize: 8,
     maxCompositionLength: 64,
     commitOnSpace: true,
-    enablePreviewText: true
+    enablePreviewText: false
   };
   let rimeOptions: RimeOptionState = {
     ascii_mode: false,
-    full_shape: false
+    full_shape: false,
+    emoji_suggestion: true
   };
   let rimeConfig: OffhandRimeConfig = {
     schemaId: 'offhand_pinyin',
@@ -182,6 +217,18 @@ function createDefaultConfig(): OffhandImeConfig {
   };
   let pinyinConfig: OffhandPinyinConfig = {
     engine: 'librime',
+    enablePrediction: true,
+    enableMixedInput: true,
+    enableFuzzy: true,
+    fuzzyPairs: [
+      ['z', 'zh'],
+      ['c', 'ch'],
+      ['s', 'sh'],
+      ['an', 'ang'],
+      ['en', 'eng'],
+      ['in', 'ing'],
+      ['l', 'n']
+    ],
     rime: rimeConfig
   };
   let voiceConfig: OffhandVoiceConfig = {
@@ -235,7 +282,7 @@ function applyRuntimeSettings(base: OffhandImeConfig, runtime: OffhandRuntimeSet
 function createDefaultSubtypes(): OffhandSubtypeConfig[] {
   let zhExtra: OffhandSubtypeExtras = {
     punctuationMode: 'zh',
-    supportedKeyboardLayouts: ['qwerty_26', 't9_9']
+    supportedKeyboardLayouts: ['t9_9', 'qwerty_26']
   };
   let zhSubtype: OffhandSubtypeConfig = {
     id: 'zh-Hans-pinyin',
@@ -245,7 +292,7 @@ function createDefaultSubtypes(): OffhandSubtypeConfig[] {
     mode: 'lower',
     engine: 'librime',
     schemaId: 'offhand_pinyin',
-    keyboardLayout: 'qwerty_26',
+    keyboardLayout: 't9_9',
     voiceEnabled: true,
     llmPolishEnabled: true,
     domainHints: ['general', 'chat', 'office'],
@@ -298,6 +345,9 @@ function cloneOptionState(source: RimeOptionState): RimeOptionState {
     ascii_mode: source.ascii_mode,
     full_shape: source.full_shape
   };
+  if (source.emoji_suggestion !== undefined) {
+    options.emoji_suggestion = source.emoji_suggestion;
+  }
   return options;
 }
 
@@ -318,6 +368,10 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
     },
     pinyin: {
       engine: source.pinyin.engine,
+      enablePrediction: source.pinyin.enablePrediction,
+      enableMixedInput: source.pinyin.enableMixedInput,
+      enableFuzzy: source.pinyin.enableFuzzy,
+      fuzzyPairs: source.pinyin.fuzzyPairs.map((pair: string[]): string[] => pair.slice(0, 2)),
       rime: {
         schemaId: source.pinyin.rime.schemaId,
         sharedDataDir: source.pinyin.rime.sharedDataDir,
@@ -447,12 +501,178 @@ function resolveAppPrivatePath(path: string, filesDir: string, fallbackSuffix: s
   return path;
 }
 
-function writeBinaryFile(path: string, content: Uint8Array): void {
+function writeTextFile(path: string, content: string): void {
   let file = fileIo.openSync(path, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC);
   try {
-    let buffer = content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength);
-    fileIo.writeSync(file.fd, buffer);
+    fileIo.writeSync(file.fd, content);
   } finally {
     fileIo.closeSync(file);
   }
+}
+
+function resetDirectoryContents(path: string): void {
+  try {
+    if (!fileIo.accessSync(path)) {
+      ensureDirectory(path);
+      return;
+    }
+  } catch (_) {
+    ensureDirectory(path);
+    return;
+  }
+  let entries: string[] = [];
+  try {
+    entries = fileIo.listFileSync(path);
+  } catch (_) {
+    return;
+  }
+  for (let index = 0; index < entries.length; index++) {
+    removeRecursively(`${path}/${entries[index]}`);
+  }
+}
+
+function removeRecursively(path: string): void {
+  let stat: fileIo.Stat;
+  try {
+    stat = fileIo.lstatSync(path);
+  } catch (_) {
+    return;
+  }
+  if (stat.isDirectory()) {
+    let entries: string[] = [];
+    try {
+      entries = fileIo.listFileSync(path);
+    } catch (_) {
+      entries = [];
+    }
+    for (let index = 0; index < entries.length; index++) {
+      removeRecursively(`${path}/${entries[index]}`);
+    }
+    try {
+      fileIo.rmdirSync(path);
+    } catch (_) {
+    }
+    return;
+  }
+  try {
+    fileIo.unlinkSync(path);
+  } catch (_) {
+  }
+}
+
+function buildRimeResourceSignature(config: OffhandImeConfig): string {
+  let pageSize = Math.max(3, Math.min(12, config.input.candidatePageSize));
+  let fuzzyState = config.pinyin.enableFuzzy ? '1' : '0';
+  let predictionState = config.pinyin.enablePrediction ? '1' : '0';
+  let fuzzyPairs = config.pinyin.fuzzyPairs.map((pair: string[]): string => pair.join('>')).join('|');
+  return `${RIME_RESOURCE_VERSION}|${pageSize}|${predictionState}|${fuzzyState}|${fuzzyPairs}`;
+}
+
+function writeUtf8ResourceFile(path: string, content: string): void {
+  writeTextFile(path, content);
+}
+
+function buildRimeCustomPatch(config: OffhandImeConfig): string {
+  let lines: string[] = [];
+  let pageSize = Math.max(3, Math.min(12, config.input.candidatePageSize));
+  lines.push('patch:');
+  lines.push(`  menu/page_size: ${pageSize}`);
+  lines.push(`  translator/enable_sentence: ${config.pinyin.enablePrediction ? 'true' : 'false'}`);
+  lines.push(`  translator/enable_completion: ${config.pinyin.enablePrediction ? 'true' : 'false'}`);
+  lines.push('  speller/algebra:');
+  let rules = buildSpellerAlgebra(config.pinyin.enableFuzzy, config.pinyin.fuzzyPairs);
+  for (let index = 0; index < rules.length; index++) {
+    lines.push(`    - ${rules[index]}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+function buildSpellerAlgebra(enableFuzzy: boolean, fuzzyPairs: string[][]): string[] {
+  let rules = DEFAULT_SPELLER_ALGEBRA.slice();
+  if (!enableFuzzy) {
+    return rules;
+  }
+  let extraRules: string[] = [];
+  for (let index = 0; index < fuzzyPairs.length; index++) {
+    let pair = fuzzyPairs[index];
+    if (!Array.isArray(pair) || pair.length < 2) {
+      continue;
+    }
+    appendFuzzyRules(extraRules, normalizeToken(pair[0]), normalizeToken(pair[1]));
+  }
+  for (let index = 0; index < extraRules.length; index++) {
+    if (rules.indexOf(extraRules[index]) < 0) {
+      rules.push(extraRules[index]);
+    }
+  }
+  return rules;
+}
+
+function appendFuzzyRules(rules: string[], left: string, right: string): void {
+  if (left.length === 0 || right.length === 0 || left === right) {
+    return;
+  }
+  if (isPair(left, right, 'z', 'zh')) {
+    pushRules(rules, ['derive/^z(.*)$/zh$1/', 'derive/^zh(.*)$/z$1/']);
+    return;
+  }
+  if (isPair(left, right, 'c', 'ch')) {
+    pushRules(rules, ['derive/^c(.*)$/ch$1/', 'derive/^ch(.*)$/c$1/']);
+    return;
+  }
+  if (isPair(left, right, 's', 'sh')) {
+    pushRules(rules, ['derive/^s(.*)$/sh$1/', 'derive/^sh(.*)$/s$1/']);
+    return;
+  }
+  if (isPair(left, right, 'l', 'n')) {
+    pushRules(rules, ['derive/^l(.*)$/n$1/', 'derive/^n(.*)$/l$1/']);
+    return;
+  }
+  if (isPair(left, right, 'f', 'h')) {
+    pushRules(rules, ['derive/^f(.*)$/h$1/', 'derive/^h(.*)$/f$1/']);
+    return;
+  }
+  if (isPair(left, right, 'an', 'ang')) {
+    pushRules(rules, ['derive/an$/ang/', 'derive/ang$/an/']);
+    return;
+  }
+  if (isPair(left, right, 'en', 'eng')) {
+    pushRules(rules, ['derive/en$/eng/', 'derive/eng$/en/']);
+    return;
+  }
+  if (isPair(left, right, 'in', 'ing')) {
+    pushRules(rules, ['derive/in$/ing/', 'derive/ing$/in/']);
+    return;
+  }
+  if (isPair(left, right, 'ian', 'iang')) {
+    pushRules(rules, ['derive/ian$/iang/', 'derive/iang$/ian/']);
+    return;
+  }
+  if (isPair(left, right, 'uan', 'uang')) {
+    pushRules(rules, ['derive/uan$/uang/', 'derive/uang$/uan/']);
+    return;
+  }
+  if (isPair(left, right, 'u', 'ou')) {
+    pushRules(rules, ['derive/u$/ou/', 'derive/ou$/u/']);
+    return;
+  }
+  if (isPair(left, right, 'ue', 've') || isPair(left, right, 'u', 'v')) {
+    pushRules(rules, ['derive/^([nl])ve$/$1ue/', 'derive/^([nl])ue$/$1ve/', 'derive/^([jqxy])u/$1v/']);
+  }
+}
+
+function pushRules(target: string[], values: string[]): void {
+  for (let index = 0; index < values.length; index++) {
+    if (target.indexOf(values[index]) < 0) {
+      target.push(values[index]);
+    }
+  }
+}
+
+function isPair(left: string, right: string, a: string, b: string): boolean {
+  return (left === a && right === b) || (left === b && right === a);
+}
+
+function normalizeToken(value: string): string {
+  return value.trim().toLowerCase();
 }

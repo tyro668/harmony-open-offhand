@@ -1,7 +1,28 @@
+# Rime schema
+# encoding: utf-8
+
 schema:
   schema_id: offhand_pinyin
   name: Offhand Pinyin
-  version: "0.2"
+  version: '0.8'
+  author:
+    - Offhand IME
+  description: |
+    Offhand 的中文拼音方案，基于 luna_pinyin 词典与语法配置，
+    额外挂载应用自定义短语词库。词典已预先转换为简体，
+    故不再依赖 opencc 与 simplifier 滤镜。
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [ 中文, 西文 ]
+  - name: full_shape
+    states: [ 半角, 全角 ]
+  - name: ascii_punct
+    states: [ 。，, ．， ]
+  - name: emoji_suggestion
+    reset: 1
+    states: [ 关Emoji, 开Emoji ]
 
 engine:
   processors:
@@ -22,27 +43,30 @@ engine:
   translators:
     - punct_translator
     - script_translator
+  filters:
+    - uniquifier
 
 speller:
   alphabet: zyxwvutsrqponmlkjihgfedcba
   delimiter: " '"
   algebra:
-    - erase/^xx$/
-    - abbrev/^([a-z]).+$/$1/
-    - abbrev/^([zcs]h).+$/$1/
-    - derive/^([nl])ve$/$1ue/
-    - derive/^([jqxy])u/$1v/
-    - derive/un$/uen/
-    - derive/ui$/uei/
-    - derive/iu$/iou/
-    - derive/([aeiou])ng$/$1gn/
-    - derive/ong$/on/
-    - derive/ao$/oa/
+    __patch:
+      - pinyin:/abbreviation
+      - pinyin:/spelling_correction
+      - pinyin:/key_correction
 
 translator:
-  dictionary: luna_pinyin
+  dictionary: offhand_pinyin
+  prism: offhand_pinyin
+  user_dict: offhand_pinyin
+  enable_sentence: true
+  enable_completion: true
+  enable_user_dict: true
+  initial_quality: 1.2
   preedit_format:
-    - xform/([nljqxy])v/$1ü/
+    - xform/([nl])v/$1ü/
+    - xform/([nl])ue/$1üe/
+    - xform/([jqxy])v/$1u/
 
 punctuator:
   import_preset: default
@@ -53,13 +77,5 @@ key_binder:
 recognizer:
   import_preset: default
 
-switches:
-  - name: ascii_mode
-    reset: 0
-    states:
-      - 中文
-      - 西文
-  - name: full_shape
-    states:
-      - 半角
-      - 全角
+__patch:
+  - offhand_pinyin.custom:/patch?

@@ -37,18 +37,24 @@ export class RimeService {
   private initSignature: string = '';
 
   initialize(options: RimeInitOptions): void {
-    let nextSignature = `${options.sharedDataDir}|${options.userDataDir}`;
+    let nextSignature = `${options.sharedDataDir}|${options.userDataDir}|${options.resourceVersion ?? ''}`;
     if (this.initialized && this.initSignature === nextSignature) {
       return;
     }
-    this.ensureStatusOk(bridge.init(options.sharedDataDir, options.userDataDir), 'init');
-    this.ensureStatusOk(bridge.deployIfNeeded(), 'deploy');
+    let initStatus = bridge.init(options.sharedDataDir, options.userDataDir);
+    hilog.info(DOMAIN, TAG, 'init status %{public}s', initStatus);
+    this.ensureStatusOk(initStatus, 'init');
+    let deployStatus = bridge.deployIfNeeded();
+    hilog.info(DOMAIN, TAG, 'deploy status %{public}s', deployStatus);
+    this.ensureStatusOk(deployStatus, 'deploy');
     this.initialized = true;
     this.initSignature = nextSignature;
   }
 
   createSession(schemaId: string): string {
-    return bridge.createSession(schemaId);
+    let sessionId = bridge.createSession(schemaId);
+    hilog.info(DOMAIN, TAG, 'createSession(%{public}s) => %{public}s', schemaId, sessionId);
+    return sessionId;
   }
 
   destroySession(sessionId: string): void {
@@ -94,6 +100,9 @@ export class RimeService {
     let state = this.getState(sessionId);
     state = this.parseRimeState(bridge.setOption(sessionId, 'ascii_mode', options.ascii_mode));
     state = this.parseRimeState(bridge.setOption(sessionId, 'full_shape', options.full_shape));
+    if (options.emoji_suggestion !== undefined) {
+      state = this.parseRimeState(bridge.setOption(sessionId, 'emoji_suggestion', options.emoji_suggestion));
+    }
     return state;
   }
 
@@ -107,6 +116,23 @@ export class RimeService {
 
   setInput(sessionId: string, input: string): RimeState {
     return this.parseRimeState(bridge.setInput(sessionId, input));
+  }
+
+  syncInput(sessionId: string, targetInput: string): RimeState {
+    let state = this.getState(sessionId);
+    let currentInput = state.rawInput ?? '';
+    if (targetInput === currentInput) {
+      return state;
+    }
+    let prefixLength = commonPrefixLength(currentInput, targetInput);
+    while (currentInput.length > prefixLength) {
+      state = this.processBackspace(sessionId);
+      currentInput = state.rawInput ?? '';
+    }
+    for (let index = prefixLength; index < targetInput.length; index++) {
+      state = this.processKey(sessionId, targetInput.charCodeAt(index), 0);
+    }
+    return state;
   }
 
   pageUp(sessionId: string): RimeState {
@@ -194,4 +220,13 @@ function defaultOptions(): RimeOptionState {
     full_shape: false
   };
   return options;
+}
+
+function commonPrefixLength(left: string, right: string): number {
+  let length = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < length && left[index] === right[index]) {
+    index++;
+  }
+  return index;
 }

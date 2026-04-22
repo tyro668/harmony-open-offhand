@@ -10,6 +10,10 @@ import { SessionManager } from '../session/SessionManager';
 const DOMAIN = 0xFF10;
 const TAG = 'OffhandIME';
 
+interface PanelWithAdjustRect {
+  adjustPanelRect?: (flag: inputMethodEngine.PanelFlag, rect: inputMethodEngine.PanelRect) => Promise<void>;
+}
+
 class KeyboardPanelSize {
   width: number;
   height: number;
@@ -27,6 +31,7 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   private readonly sessionManager = new SessionManager(this.configRepository, this.rimeService);
   private keyboardPanel?: inputMethodEngine.Panel;
   private bootstrapPromise?: Promise<void>;
+  private displayChangeRegistered: boolean = false;
 
   private readonly onInputStart = (keyboardController: inputMethodEngine.KeyboardController,
     inputClient: inputMethodEngine.InputClient): void => {
@@ -82,6 +87,7 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
 
   onDestroy(): void {
     this.unregisterEvents();
+    this.unregisterDisplayChangeListener();
     this.sessionManager.dispose();
     hilog.info(DOMAIN, TAG, 'Input method extension destroyed');
   }
@@ -103,32 +109,115 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
     }
     try {
       let inputMethodAbility = this.requireInputMethodAbility();
+      // SOFT_KEYBOARD + FLG_FIXED: the system docks this panel to the bottom of the
+      // focused window and automatically raises the focused editor above the
+      // keyboard area, keeping the input cursor visible in sync with the keyboard.
       let panelInfo: inputMethodEngine.PanelInfo = {
         type: inputMethodEngine.PanelType.SOFT_KEYBOARD,
         flag: inputMethodEngine.PanelFlag.FLG_FIXED
       };
       let keyboardPanel = await inputMethodAbility.createPanel(this.context, panelInfo);
       await keyboardPanel.setUiContent('ime/panel/KeyboardPanel');
-      let panelSize = this.resolveKeyboardPanelSize();
-      await keyboardPanel.resize(panelSize.width, panelSize.height);
+      await this.applyKeyboardPanelSize(keyboardPanel);
       this.keyboardPanel = keyboardPanel;
       this.sessionManager.bindPanel(keyboardPanel);
+      this.registerDisplayChangeListener();
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Failed to create keyboard panel: %{public}s', JSON.stringify(error));
     }
   }
 
-  private resolveKeyboardPanelSize(): KeyboardPanelSize {
+  private async applyKeyboardPanelSize(panel: inputMethodEngine.Panel): Promise<void> {
+    let portrait = this.resolveKeyboardPanelSize(false);
+    let landscape = this.resolveKeyboardPanelSize(true);
+    // Prefer adjustPanelRect: it reports both portrait and landscape rects to
+    // the window manager so it can compute the keyboard avoid area and lift
+    // the focused editor above the keyboard on every orientation. Fall back to
+    // resize() for older API levels that only implement the legacy path.
+    let adjusted = false;
     try {
-      let currentDisplay = display.getDefaultDisplaySync();
-      let width = Math.max(720, currentDisplay.width);
-      let estimatedHeight = Math.round(currentDisplay.height * 0.34);
-      let height = Math.max(640, Math.min(estimatedHeight, 980));
-      return new KeyboardPanelSize(width, height);
-    } catch (_) {
-      return new KeyboardPanelSize(1320, 860);
+      let panelWithAdjust = panel as ESObject as PanelWithAdjustRect;
+      if (typeof panelWithAdjust.adjustPanelRect === 'function') {
+        let rect: inputMethodEngine.PanelRect = {
+          landscapeRect: { left: 0, top: 0, width: landscape.width, height: landscape.height },
+          portraitRect: { left: 0, top: 0, width: portrait.width, height: portrait.height }
+        };
+        await panelWithAdjust.adjustPanelRect(inputMethodEngine.PanelFlag.FLG_FIXED, rect);
+        adjusted = true;
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'adjustPanelRect failed, falling back to resize: %{public}s',
+        JSON.stringify(error));
+    }
+    if (!adjusted) {
+      let fallback = this.resolveKeyboardPanelSize(false);
+      try {
+        await panel.resize(fallback.width, fallback.height);
+      } catch (error) {
+        hilog.error(DOMAIN, TAG, 'Failed to resize keyboard panel: %{public}s', JSON.stringify(error));
+      }
     }
   }
+
+  private resolveKeyboardPanelSize(landscape: boolean): KeyboardPanelSize {
+    try {
+      let currentDisplay = display.getDefaultDisplaySync();
+      let displayWidth = currentDisplay.width;
+      let displayHeight = currentDisplay.height;
+      let shortSide = Math.min(displayWidth, displayHeight);
+      let longSide = Math.max(displayWidth, displayHeight);
+      // FLG_FIXED soft keyboard width must equal the screen width on the
+      // matching orientation so the avoid area calculation covers the full
+      // bottom strip; otherwise the focused editor is not lifted properly.
+      let width = landscape ? longSide : shortSide;
+      let baseHeight = landscape ? shortSide : longSide;
+      // Portrait keyboards occupy ~38% of the long side, landscape keyboards
+      // ~48% of the short side, mirroring standard mobile IME proportions so
+      // the editor cursor stays comfortably above the keyboard.
+      let ratio = landscape ? 0.48 : 0.38;
+      let estimatedHeight = Math.round(baseHeight * ratio);
+      let minHeight = Math.round(shortSide * 0.32);
+      let maxHeight = Math.round(longSide * 0.5);
+      let height = Math.max(minHeight, Math.min(estimatedHeight, maxHeight));
+      return new KeyboardPanelSize(width, height);
+    } catch (_) {
+      return landscape ? new KeyboardPanelSize(1920, 520) : new KeyboardPanelSize(1080, 820);
+    }
+  }
+
+  private registerDisplayChangeListener(): void {
+    if (this.displayChangeRegistered) {
+      return;
+    }
+    try {
+      display.on('change', this.onDisplayChange);
+      this.displayChangeRegistered = true;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Failed to register display change listener: %{public}s', JSON.stringify(error));
+    }
+  }
+
+  private unregisterDisplayChangeListener(): void {
+    if (!this.displayChangeRegistered) {
+      return;
+    }
+    try {
+      display.off('change', this.onDisplayChange);
+    } catch (_) {
+    }
+    this.displayChangeRegistered = false;
+  }
+
+  private readonly onDisplayChange = (_: number): void => {
+    if (!this.keyboardPanel) {
+      return;
+    }
+    void this.runTask('displayChange', async (): Promise<void> => {
+      if (this.keyboardPanel) {
+        await this.applyKeyboardPanelSize(this.keyboardPanel);
+      }
+    });
+  };
 
   private registerEvents(): void {
     let inputMethodAbility = this.requireInputMethodAbility();

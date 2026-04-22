@@ -1,17 +1,28 @@
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { CandidateItem, KeyboardLayoutId, KeyboardLayoutOption, SubtypeSummary } from '../common/ImeTypes';
 import { imeRuntime } from '../runtime/ImeRuntime';
 import { KeyboardUiState, keyboardStateStore } from '../session/KeyboardStateStore';
+
+const PANEL_DOMAIN: number = 0xFF10;
+const PANEL_TAG: string = 'KeyboardPanel';
 
 const LETTER_ROW_TOP: string[] = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
 const LETTER_ROW_MIDDLE: string[] = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'];
 const LETTER_ROW_BOTTOM: string[] = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
 const SIDE_PUNCTUATIONS: string[] = ['，', '。', '？', '！'];
 const COMMON_SYMBOLS: string[] = ['，', '。', '？', '！', '@', '#', '/', '-', '_', ':', ';', '(', ')'];
+const TOP_ACCESSORY_HEIGHT: number = 60;
 
 interface NineGridKeyDescriptor {
   digit: string;
   label: string;
   action: 'digit' | 'text';
+  value: string;
+}
+
+interface QwertyKeyDescriptor {
+  hint: string;
+  label: string;
   value: string;
 }
 
@@ -33,20 +44,74 @@ const NINE_GRID_ROWS: NineGridKeyDescriptor[][] = [
   ]
 ];
 
+const QWERTY_TOP_KEYS: QwertyKeyDescriptor[] = [
+  { hint: '1', label: 'Q', value: 'q' },
+  { hint: '2', label: 'W', value: 'w' },
+  { hint: '3', label: 'E', value: 'e' },
+  { hint: '4', label: 'R', value: 'r' },
+  { hint: '5', label: 'T', value: 't' },
+  { hint: '6', label: 'Y', value: 'y' },
+  { hint: '7', label: 'U', value: 'u' },
+  { hint: '8', label: 'I', value: 'i' },
+  { hint: '9', label: 'O', value: 'o' },
+  { hint: '0', label: 'P', value: 'p' }
+];
+
+const QWERTY_MIDDLE_KEYS: QwertyKeyDescriptor[] = [
+  { hint: '~', label: 'A', value: 'a' },
+  { hint: '@', label: 'S', value: 's' },
+  { hint: '#', label: 'D', value: 'd' },
+  { hint: '$', label: 'F', value: 'f' },
+  { hint: '%', label: 'G', value: 'g' },
+  { hint: '&', label: 'H', value: 'h' },
+  { hint: '*', label: 'J', value: 'j' },
+  { hint: '(', label: 'K', value: 'k' },
+  { hint: ')', label: 'L', value: 'l' }
+];
+
+const QWERTY_BOTTOM_KEYS: QwertyKeyDescriptor[] = [
+  { hint: '\'', label: 'Z', value: 'z' },
+  { hint: '/', label: 'X', value: 'x' },
+  { hint: '-', label: 'C', value: 'c' },
+  { hint: '_', label: 'V', value: 'v' },
+  { hint: ':', label: 'B', value: 'b' },
+  { hint: ';', label: 'N', value: 'n' },
+  { hint: '`', label: 'M', value: 'm' }
+];
+
 @Entry
 @Component
 struct KeyboardPanel {
   @State private uiState: KeyboardUiState = keyboardStateStore.getSnapshot();
   @State private showSettingsTray: boolean = false;
+  @State private activeSettingsTab: string = 'common';
   @State private showSymbolPalette: boolean = false;
+  @State private qwertyShiftEnabled: boolean = false;
   private unsubscribe?: () => void;
+
+  // @Styles methods can only include universal attributes and are state-less;
+  // we express the pressed state as a darker background so Column-based keys
+  // (which lack a built-in ripple) get the same tactile feedback as Buttons.
+  @Styles pressedWhiteKeyStyle() {
+    .backgroundColor('#DDE0E6')
+  }
+
+  @Styles pressedGrayKeyStyle() {
+    .backgroundColor('#AFB1B9')
+  }
 
   aboutToAppear(): void {
     this.unsubscribe = keyboardStateStore.subscribe((state: KeyboardUiState): void => {
       this.uiState = state;
       if (!state.sessionActive) {
-        this.showSettingsTray = false;
-        this.showSymbolPalette = false;
+        if (!this.showSettingsTray) {
+          this.showSymbolPalette = false;
+          this.activeSettingsTab = 'common';
+        }
+        this.qwertyShiftEnabled = false;
+      }
+      if (state.keyboardLayout !== 'qwerty_26') {
+        this.qwertyShiftEnabled = false;
       }
     });
   }
@@ -59,142 +124,477 @@ struct KeyboardPanel {
   }
 
   build() {
-    Scroll() {
-      Column({ space: 10 }) {
-        this.renderTopToolbar();
-        this.renderSettingsTray();
-        this.renderCandidateOrSymbolStrip();
-        this.renderVoiceDraftCard();
-        this.renderPolishSuggestionStrip();
-        if (this.uiState.keyboardLayout === 'voice_panel') {
-          this.renderVoicePanel();
-        } else if (this.uiState.keyboardLayout === 't9_9') {
-          this.renderReferenceNineKeyKeyboard();
-        } else {
-          this.renderReferenceQwertyKeyboard();
+    Stack() {
+      if (!this.showSettingsTray) {
+        Column({ space: 8 }) {
+          this.renderTopAccessoryArea()
+          this.renderVoiceDraftCard()
+          this.renderPolishSuggestionStrip()
+
+          if (this.uiState.keyboardLayout === 'voice_panel') {
+            this.renderVoicePanel();
+          } else if (this.uiState.keyboardLayout === 't9_9') {
+            this.renderReferenceNineKeyKeyboard();
+          } else {
+            this.renderReferenceQwertyKeyboard();
+          }
+
+          if (this.uiState.keyboardLayout !== 'voice_panel') {
+            this.renderBottomDock()
+          }
         }
+        .width('100%')
+        .height('100%')
+        .padding({ left: 8, right: 8, top: 10, bottom: 0 })
+        .backgroundColor('#D9DCE2')
+      } else {
+        Column({ space: 0 }) {
+          this.renderSettingsOverlay()
+          this.renderBottomDock()
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ left: 8, right: 8, top: 10, bottom: 0 })
+        .backgroundColor('#D9DCE2')
+        .zIndex(10)
       }
-      .width('100%')
-      .padding({ top: 12, right: 12, bottom: 16, left: 12 })
     }
     .width('100%')
     .height('100%')
-    .scrollable(ScrollDirection.Vertical)
-    .backgroundColor('#E6E6E8')
+    .backgroundColor('#D9DCE2')
+  }
+
+  @Builder
+  private renderTopAccessoryArea() {
+    Column() {
+      if (this.shouldShowCandidateStrip()) {
+        this.renderCandidateOrSymbolStrip()
+      } else {
+        this.renderFeatureRow()
+      }
+    }
+    .width('100%')
+    .height(TOP_ACCESSORY_HEIGHT)
+    .justifyContent(FlexAlign.Center)
   }
 
   @Builder
   private renderTopToolbar() {
-    Row() {
-      // 左侧：设置入口（单一图标聚合所有开关）
-      this.renderTopIconButton('⌨', this.showSettingsTray, (): void => {
+    Row({ space: 12 }) {
+      this.renderHeaderOutlineButton('◉', (): void => {
         this.showSettingsTray = !this.showSettingsTray;
       })
 
-      // 中部：弹性占位，让右侧功能图标靠右分布
-      Blank()
-        .layoutWeight(1)
-
-      // 语音
-      this.renderTopIconButton(this.uiState.voiceState === 'recording' ? '●' : '🎤',
-        this.uiState.voiceState === 'recording', (): void => {
-          this.startOrStopVoice();
-        }, this.uiState.voiceEnabled)
-
-      // 润色
-      this.renderTopIconButton('✦', this.uiState.polishEnabled && this.uiState.canPolish, (): void => {
-        if (this.uiState.polishEnabled && this.uiState.canPolish && !this.uiState.isPolishRunning) {
-          void imeRuntime.getSessionManager()?.polishPendingText();
-        }
-      }, this.uiState.polishEnabled)
-
-      // 符号面板
-      this.renderTopIconButton('☺', this.showSymbolPalette, (): void => {
+      this.renderHeaderOutlineButton('☺', (): void => {
         this.showSymbolPalette = !this.showSymbolPalette;
       })
 
-      // 分隔线
-      Column()
-        .width(1)
-        .height(20)
-        .backgroundColor('#D4D4D8')
-        .margin({ left: 6, right: 6 })
+      this.renderComposeCapsule()
 
-      // 收起键盘
-      this.renderTopIconButton('∨', false, (): void => {
-        void imeRuntime.getSessionManager()?.handleKeyboardHide();
-      })
+      this.renderHeaderOutlineButton('+', (): void => {
+        this.handlePrimaryToolbarAction();
+      }, this.canUsePrimaryAction())
+
+      this.renderHeaderSendButton()
     }
     .width('100%')
-    .height(44)
-    .padding({ left: 6, right: 6 })
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 14, right: 14, top: 6, bottom: 6 })
+    .backgroundColor('#FFFFFF')
   }
 
   @Builder
-  private renderSettingsTray() {
-    if (this.showSettingsTray) {
-      Column({ space: 10 }) {
-        Row({ space: 8 }) {
-          Text(this.uiState.currentSubtypeName.length > 0 ? this.uiState.currentSubtypeName : 'Offhand IME')
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#202020')
-            .layoutWeight(1)
-            .textAlign(TextAlign.Start)
+  private renderReferenceQwertyTopToolbar() {
+    Row({ space: 12 }) {
+      this.renderReferenceQwertyHeaderButton('◉', (): void => {
+        this.startOrStopVoice();
+      })
 
-          Text(this.resolveLayoutDisplayLabel(this.uiState.keyboardLayout))
-            .fontSize(11)
-            .fontColor('#585858')
-            .padding({ top: 5, right: 9, bottom: 5, left: 9 })
-            .backgroundColor('#F1F1F4')
-            .borderRadius(999)
-        }
-        .width('100%')
+      this.renderReferenceQwertyComposePanel()
 
-        this.renderStatusChipRow()
+      this.renderReferenceQwertyHeaderButton('☺︎', (): void => {
+        this.showSymbolPalette = !this.showSymbolPalette;
+      })
 
-        if (this.uiState.availableKeyboardLayouts.length > 1) {
-          Scroll() {
-            Row({ space: 8 }) {
-              ForEach(this.uiState.availableKeyboardLayouts, (layout: KeyboardLayoutOption) => {
-                this.renderTrayPill(layout.label, layout.id === this.uiState.keyboardLayout, (): void => {
-                  if (layout.id !== this.uiState.keyboardLayout) {
-                    void imeRuntime.getSessionManager()?.switchKeyboardLayout(layout.id);
-                  }
-                })
-              }, (layout: KeyboardLayoutOption): string => layout.id)
-            }
-          }
-          .scrollable(ScrollDirection.Horizontal)
-          .width('100%')
-        }
+      this.renderReferenceQwertyHeaderButton('+', (): void => {
+        this.handlePrimaryToolbarAction();
+      })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 14, right: 14, top: 6, bottom: 4 })
+    .backgroundColor('#FFFFFF')
+  }
 
-        Scroll() {
-          Row({ space: 8 }) {
-            ForEach(this.uiState.availableSubtypes, (subtype: SubtypeSummary) => {
-              this.renderTrayPill(subtype.name, subtype.id === this.uiState.currentSubtypeId, (): void => {
-                if (subtype.id !== this.uiState.currentSubtypeId) {
-                  void imeRuntime.getSessionManager()?.switchSubtype(subtype.id);
-                }
-              })
-            }, (subtype: SubtypeSummary): string => subtype.id)
-          }
-        }
-        .scrollable(ScrollDirection.Horizontal)
-        .width('100%')
+  @Builder
+  private renderComposeCapsule() {
+    Row({ space: 12 }) {
+      Column()
+        .width(3)
+        .height(20)
+        .backgroundColor('#69B24C')
+        .borderRadius(999)
 
-        Text(this.uiState.editorSummary)
-          .fontSize(11)
-          .fontColor('#727272')
+      Column({ space: 4 }) {
+        Text(this.resolveComposeHeadline())
+          .fontSize(14)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#17181B')
           .width('100%')
           .textAlign(TextAlign.Start)
-          .maxLines(2)
+          .maxLines(1)
+
+        Text(this.resolveComposeSubline())
+          .fontSize(9)
+          .fontColor('#767881')
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+          .opacity(this.resolveComposeSubline().length > 0 ? 1 : 0)
+      }
+      .layoutWeight(1)
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor('#F2F0EB')
+    .borderRadius(25)
+  }
+
+  @Builder
+  private renderReferenceQwertyComposePanel() {
+    Row({ space: 14 }) {
+      Column()
+        .width(3)
+        .height(28)
+        .backgroundColor('#2B79FF')
+        .borderRadius(999)
+
+      Text(this.resolveComposeHeadline())
+        .layoutWeight(1)
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#15171B')
+        .maxLines(1)
+        .textAlign(TextAlign.Start)
+    }
+    .layoutWeight(1)
+    .height(50)
+    .padding({ left: 14, right: 14 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(10)
+  }
+
+  @Builder
+  private renderFeatureRow() {
+    Row() {
+      this.renderFeatureIconAssetButton('tool', (): void => {
+        this.toggleSettingsOverlay();
+      }, this.showSettingsTray)
+
+      Row({ space: 34 }) {
+        this.renderFeatureIconAssetButton('mic', (): void => {
+          this.startOrStopVoice();
+        }, this.uiState.voiceState === 'recording', this.uiState.voiceEnabled)
+
+        this.renderFeatureIconAssetButton('style', (): void => {
+          this.toggleReferenceLayoutStyle();
+        }, false, this.supportsNineKey() || this.supportsTwentySixKey())
+      }
+
+      Row({ space: 14 }) {
+        this.renderFeatureIconAssetButton('smile', (): void => {
+          this.showSymbolPalette = !this.showSymbolPalette;
+        }, this.showSymbolPalette)
+
+        Column()
+          .width(1)
+          .height(28)
+          .backgroundColor('#C5C8CF')
+          .margin({ left: 2, right: 2 })
+
+        this.renderFeatureIconAssetButton('chevron', (): void => {
+          void imeRuntime.getSessionManager()?.handleKeyboardHide();
+        })
+      }
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.SpaceBetween)
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 10, right: 10, top: 2, bottom: 2 })
+  }
+
+  @Builder
+  private renderSettingsOverlay() {
+    Column({ space: 0 }) {
+      this.renderSettingsHeader()
+
+      Blank()
+        .height(14)
+
+      if (this.activeSettingsTab === 'common') {
+        this.renderCommonSettingsGrid()
+      } else if (this.activeSettingsTab === 'input') {
+        this.renderInputSettingsGrid()
+      } else {
+        this.renderLayoutSettingsGrid()
+      }
+
+      Blank()
+        .layoutWeight(1)
+
+      Blank()
+        .height(10)
+
+      this.renderSettingsPager()
+
+      Blank()
+        .height(8)
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 14, right: 14, top: 8, bottom: 2 })
+  }
+
+  @Builder
+  private renderSettingsHeader() {
+    Row({ space: 10 }) {
+      Button() {
+        this.renderSettingsIconAsset('collapse', 24, 24)
+      }
+        .width(46)
+        .height(46)
+        .backgroundColor('#D4D7DC')
+        .borderRadius(23)
+        .shadow(this.resolveGrayKeyShadow())
+        .onClick(() => {
+          this.closeSettingsOverlay();
+        })
+
+      Row({ space: 4 }) {
+        this.renderSettingsTabButton('common', '常用功能')
+        this.renderSettingsTabButton('input', '输入方式')
+        this.renderSettingsTabButton('layout', '键盘模式')
+      }
+      .layoutWeight(1)
+      .height(54)
+      .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+      .backgroundColor('#D4D7DC')
+      .borderRadius(27)
+
+      Image($r('app.media.ime_icon_settings_avatar'))
+        .width(46)
+        .height(46)
+        .objectFit(ImageFit.Cover)
+        .borderRadius(23)
+        .shadow(this.resolveGrayKeyShadow())
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private renderSettingsTabButton(tabId: string, label: string) {
+    Button() {
+      Text(label)
+        .width('100%')
+        .fontSize(12)
+        .fontWeight(this.activeSettingsTab === tabId ? FontWeight.Bold : FontWeight.Medium)
+        .fontColor(this.activeSettingsTab === tabId ? '#17181B' : '#60636A')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    }
+      .layoutWeight(1)
+      .height(46)
+      .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+      .backgroundColor(this.activeSettingsTab === tabId ? '#FFFFFF' : 'rgba(0,0,0,0)')
+      .borderRadius(23)
+      .shadow(this.resolveSettingsTabShadow(this.activeSettingsTab === tabId))
+      .onClick(() => {
+        this.activeSettingsTab = tabId;
+      })
+  }
+
+  @Builder
+  private renderCommonSettingsGrid() {
+    Column({ space: 12 }) {
+      Row({ space: 12 }) {
+        this.renderSettingsTile('help', '帮助和反馈', (): void => {})
+        this.renderSettingsTile('gear', '设置', (): void => {})
+        this.renderSettingsTile('clipboard', '剪贴板', (): void => {})
+        this.renderSettingsTile('edit', '编辑键盘', (): void => {
+          this.activeSettingsTab = 'layout';
+        })
       }
       .width('100%')
-      .padding(12)
-      .backgroundColor('#FFFFFF')
-      .borderRadius(22)
+
+      Row({ space: 12 }) {
+        this.renderSettingsTile('lexicon', '词库', (): void => {
+          this.activeSettingsTab = 'input';
+        })
+        this.renderSettingsTile('font', '字体大小', (): void => {})
+        this.renderSettingsTile('sound', '声音和振动', (): void => {})
+        this.renderSettingsTile('skin', '皮肤', (): void => {})
+      }
+      .width('100%')
     }
+    .width('100%')
+    .padding({ left: 0, right: 0, bottom: 4 })
+  }
+
+  @Builder
+  private renderInputSettingsGrid() {
+    Column({ space: 12 }) {
+      Row({ space: 12 }) {
+        this.renderSettingsTile('拼', '中文拼音', (): void => {
+          this.switchSettingsSubtype('zh-Hans-pinyin');
+        }, !this.isEnglishSubtype())
+        this.renderSettingsTile('EN', '英文输入', (): void => {
+          this.switchSettingsSubtype('en-US-qwerty');
+        }, this.isEnglishSubtype())
+        this.renderSettingsTile('voice', '语音输入', (): void => {
+          // 切换到语音面板时，确保使用支持语音的子类型
+          let voiceSubtype = this.findSubtypeById('zh-CN-voice');
+          if (voiceSubtype.length > 0) {
+            void imeRuntime.getSessionManager()?.switchSubtype(voiceSubtype);
+          } else {
+            let pinyinSubtype = this.findSubtypeById('zh-Hans-pinyin');
+            if (pinyinSubtype.length > 0) {
+              void imeRuntime.getSessionManager()?.switchSubtype(pinyinSubtype);
+            }
+          }
+          void imeRuntime.getSessionManager()?.switchKeyboardLayout('voice_panel');
+          this.closeSettingsOverlay();
+        }, this.uiState.keyboardLayout === 'voice_panel')
+        this.renderSettingsTile('#', '符号面板', (): void => {
+          this.showSymbolPalette = true;
+          this.closeSettingsOverlay();
+        }, this.showSymbolPalette)
+      }
+      .width('100%')
+
+      Row({ space: 12 }) {
+        this.renderSettingsInfoTile('当前语言', this.uiState.currentSubtypeName)
+        this.renderSettingsInfoTile('会话状态', this.uiState.sessionActive ? '已连接' : '未连接')
+        this.renderSettingsInfoTile('语音入口', this.uiState.voiceEnabled ? '可用' : '关闭')
+        this.renderSettingsInfoTile('润色建议', this.uiState.polishEnabled ? '可用' : '关闭')
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 0, right: 0, bottom: 4 })
+  }
+
+  @Builder
+  private renderLayoutSettingsGrid() {
+    Column({ space: 12 }) {
+      Row({ space: 12 }) {
+        this.renderSettingsTile('9', '九键布局', (): void => {
+          if (this.supportsNineKey()) {
+            void imeRuntime.getSessionManager()?.switchKeyboardLayout('t9_9');
+            this.closeSettingsOverlay();
+          }
+        }, this.uiState.keyboardLayout === 't9_9')
+        this.renderSettingsTile('26', '26 键布局', (): void => {
+          if (this.supportsTwentySixKey()) {
+            void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
+            this.closeSettingsOverlay();
+          }
+        }, this.uiState.keyboardLayout === 'qwerty_26')
+        this.renderSettingsTile('语', '语音面板', (): void => {
+          void imeRuntime.getSessionManager()?.switchKeyboardLayout('voice_panel');
+          this.closeSettingsOverlay();
+        }, this.uiState.keyboardLayout === 'voice_panel')
+        this.renderSettingsInfoTile('当前模式', this.resolveLayoutDisplayLabel(this.uiState.keyboardLayout))
+      }
+      .width('100%')
+
+      Row({ space: 12 }) {
+        this.renderSettingsInfoTile('编辑器', this.uiState.editorSummary.length > 0 ? this.uiState.editorSummary : '普通文本')
+        this.renderSettingsInfoTile('候选页', `第 ${this.uiState.candidatePageNo + 1} 页`)
+        this.renderSettingsInfoTile('快捷切换', this.resolveQuickSwitchLabel())
+        this.renderSettingsTile('⟲', '关闭设置', (): void => {
+          this.closeSettingsOverlay();
+        })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 0, right: 0, bottom: 4 })
+  }
+
+  @Builder
+  private renderSettingsTile(icon: string, title: string, action: () => void, selected: boolean = false) {
+    Button() {
+      Column({ space: 10 }) {
+        this.renderSettingsIconAsset(icon, 31, 31)
+
+        Text(title)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#4D5058')
+          .textAlign(TextAlign.Center)
+          .maxLines(2)
+      }
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .width('100%')
+      .height('100%')
+      .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+    }
+    .layoutWeight(1)
+    .height(92)
+    .backgroundColor(selected ? '#EDF3FF' : '#FFFFFF')
+    .border({ width: 1, color: selected ? '#D5E4FF' : '#F5F6F8' })
+    .borderRadius(20)
+    .shadow(this.resolveWhiteKeyShadow())
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderSettingsInfoTile(title: string, value: string) {
+    Column({ space: 6 }) {
+      Text(title)
+        .fontSize(11)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#6A6D75')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+
+      Text(value)
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#202126')
+        .textAlign(TextAlign.Center)
+        .maxLines(3)
+    }
+    .layoutWeight(1)
+    .height(92)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 6, right: 6 })
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#F5F6F8' })
+    .borderRadius(20)
+    .shadow(this.resolveWhiteKeyShadow())
+  }
+
+  @Builder
+  private renderSettingsPager() {
+    Row({ space: 10 }) {
+      ForEach([0, 1, 2, 3, 4, 5], (index: number) => {
+        Column()
+          .width(index === this.resolveSettingsPagerIndex() ? 18 : 7)
+          .height(7)
+          .backgroundColor(index === this.resolveSettingsPagerIndex() ? '#286CFF' : '#D0D3DA')
+          .borderRadius(999)
+      }, (index: number): string => `${index}`)
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .margin({ top: 4 })
   }
 
   @Builder
@@ -234,105 +634,93 @@ struct KeyboardPanel {
 
   @Builder
   private renderCandidateOrSymbolStrip() {
-    if (this.showSymbolPalette) {
-      Scroll() {
-        Row({ space: 8 }) {
-          ForEach(COMMON_SYMBOLS, (symbol: string) => {
-            Button(symbol)
-              .type(ButtonType.Capsule)
-              .fontSize(16)
-              .fontColor('#232323')
-              .backgroundColor('#FFFFFF')
-              .onClick(() => {
-                this.commitText(symbol);
-                this.showSymbolPalette = false;
-              })
-          }, (symbol: string): string => symbol)
-        }
-        .padding({ left: 4, right: 4 })
-      }
-      .scrollable(ScrollDirection.Horizontal)
-      .width('100%')
-      .padding(8)
-      .backgroundColor('#F5F5F7')
-      .borderRadius(20)
-    } else if (this.uiState.candidates.length > 0 ||
-      this.uiState.preedit.length > 0 ||
-      this.uiState.activeNineKeySpelling.length > 0 ||
-      this.uiState.nineKeySpellings.length > 0 ||
-      this.uiState.sessionActive) {
-      this.renderCandidateStripBody()
-    }
-  }
-
-  @Builder
-  private renderCandidateStripBody() {
     Column({ space: 8 }) {
-      Row({ space: 8 }) {
-        Button('‹')
-          .width(34)
-          .height(34)
-          .fontSize(18)
-          .fontColor(this.uiState.hasPreviousCandidatePage ? '#333333' : '#B9BAC0')
-          .backgroundColor('#FFFFFF')
-          .borderRadius(12)
-          .opacity(this.uiState.hasPreviousCandidatePage ? 1 : 0.55)
-          .onClick(() => {
-            if (this.uiState.hasPreviousCandidatePage) {
-              void imeRuntime.getSessionManager()?.pageCandidateBackward();
-            }
-          })
-
+      if (this.showSymbolPalette) {
         Scroll() {
-          Row({ space: 8 }) {
-            if (this.uiState.candidates.length === 0) {
-              Text(this.resolveCandidatePlaceholder())
-                .fontSize(12)
-                .fontColor('#7B7C83')
-            } else {
-              ForEach(this.uiState.candidates, (candidate: CandidateItem) => {
-                Button(`${candidate.label}. ${candidate.text}`)
-                  .type(ButtonType.Capsule)
-                  .fontSize(13)
-                  .fontColor(candidate.highlighted ? '#1D1D1F' : '#35363A')
-                  .backgroundColor(candidate.highlighted ? '#DDE6D3' : '#FFFFFF')
-                  .onClick(() => {
-                    void imeRuntime.getSessionManager()?.selectCandidate(candidate.index);
-                  })
-              }, (candidate: CandidateItem): string => `${candidate.index}-${candidate.label}`)
-            }
+          Row({ space: 10 }) {
+            ForEach(COMMON_SYMBOLS, (symbol: string) => {
+              Text(symbol)
+                .fontSize(14)
+                .fontColor('#333333')
+                .width(26)
+                .height(26)
+                .textAlign(TextAlign.Center)
+                .backgroundColor('#F3F3F6')
+                .borderRadius(13)
+                .onClick(() => {
+                  this.commitText(symbol);
+                  this.showSymbolPalette = false;
+                })
+            }, (symbol: string): string => symbol)
           }
-          .padding({ left: 2, right: 2 })
         }
         .scrollable(ScrollDirection.Horizontal)
-        .layoutWeight(1)
-        .height(38)
+        .width('100%')
+        .height(28)
+      } else {
+        Row({ space: 8 }) {
+          Text('‹')
+            .fontSize(14)
+            .fontColor(this.uiState.hasPreviousCandidatePage ? '#7A7C84' : '#CCCCCC')
+            .width(22)
+            .textAlign(TextAlign.Center)
+            .onClick(() => {
+              if (this.uiState.hasPreviousCandidatePage) {
+                void imeRuntime.getSessionManager()?.pageCandidateBackward();
+              }
+            })
 
-        Button('›')
-          .width(34)
-          .height(34)
-          .fontSize(18)
-          .fontColor(this.uiState.hasNextCandidatePage ? '#333333' : '#B9BAC0')
-          .backgroundColor('#FFFFFF')
-          .borderRadius(12)
-          .opacity(this.uiState.hasNextCandidatePage ? 1 : 0.55)
-          .onClick(() => {
-            if (this.uiState.hasNextCandidatePage) {
-              void imeRuntime.getSessionManager()?.pageCandidateForward();
+          Scroll() {
+            Row({ space: 18 }) {
+              if (this.uiState.candidates.length === 0) {
+                Text(this.uiState.preedit.length > 0 ? this.uiState.preedit :
+                  (this.uiState.activeNineKeySpelling.length > 0 ? this.uiState.activeNineKeySpelling :
+                    this.resolveCandidatePlaceholder()))
+                  .fontSize(13)
+                  .fontColor(this.uiState.preedit.length > 0 ? '#2B2B2D' : '#9A9CA3')
+                  .maxLines(1)
+              } else {
+                ForEach(this.uiState.candidates, (candidate: CandidateItem) => {
+                  Text(candidate.text)
+                    .fontSize(14)
+                    .fontColor(candidate.highlighted ? '#1677FF' : '#2B2B2D')
+                    .fontWeight(candidate.highlighted ? FontWeight.Bold : FontWeight.Normal)
+                    .maxLines(1)
+                    .constraintSize({ maxWidth: 64 })
+                    .onClick(() => {
+                      void imeRuntime.getSessionManager()?.selectCandidate(candidate.index);
+                    })
+                }, (candidate: CandidateItem): string => `${candidate.index}-${candidate.label}`)
+              }
             }
-          })
-      }
-      .width('100%')
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .layoutWeight(1)
+          .height(24)
 
-      if (this.uiState.nineKeySpellings.length > 0) {
-        Scroll() {
-          Row({ space: 8 }) {
+          Text('›')
+            .fontSize(14)
+            .fontColor(this.uiState.hasNextCandidatePage ? '#4B4D55' : '#CCCCCC')
+            .width(22)
+            .textAlign(TextAlign.Center)
+            .onClick(() => {
+              if (this.uiState.hasNextCandidatePage) {
+                void imeRuntime.getSessionManager()?.pageCandidateForward();
+              }
+            })
+        }
+        .width('100%')
+        .height(24)
+
+        if (this.uiState.nineKeySpellings.length > 0) {
+          Row({ space: 6 }) {
             ForEach(this.uiState.nineKeySpellings, (spelling: string) => {
-              Button(spelling)
-                .type(ButtonType.Capsule)
-                .fontSize(12)
-                .fontColor(spelling === this.uiState.activeNineKeySpelling ? '#FFFFFF' : '#4C4D52')
-                .backgroundColor(spelling === this.uiState.activeNineKeySpelling ? '#7E856F' : '#FFFFFF')
+              Text(spelling)
+                .fontSize(10)
+                .fontColor(spelling === this.uiState.activeNineKeySpelling ? '#FFFFFF' : '#666A72')
+                .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+                .backgroundColor(spelling === this.uiState.activeNineKeySpelling ? '#1677FF' : '#EEF0F4')
+                .borderRadius(12)
                 .onClick(() => {
                   if (spelling !== this.uiState.activeNineKeySpelling) {
                     void imeRuntime.getSessionManager()?.selectNineKeySpelling(spelling);
@@ -340,16 +728,14 @@ struct KeyboardPanel {
                 })
             }, (spelling: string): string => spelling)
           }
-          .padding({ left: 2, right: 2 })
+          .width('100%')
         }
-        .scrollable(ScrollDirection.Horizontal)
-        .width('100%')
       }
     }
     .width('100%')
-    .padding(10)
-    .backgroundColor('#F5F5F7')
-    .borderRadius(20)
+    .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(18)
   }
 
   @Builder
@@ -403,9 +789,9 @@ struct KeyboardPanel {
         .width('100%')
       }
       .width('100%')
-      .padding(12)
+      .padding(8)
       .backgroundColor('#FFFFFF')
-      .borderRadius(20)
+      .borderRadius(16)
     }
   }
 
@@ -484,182 +870,236 @@ struct KeyboardPanel {
         }
       }
       .width('100%')
-      .padding(12)
+      .padding(8)
       .backgroundColor('#FFFFFF')
-      .borderRadius(20)
+      .borderRadius(16)
     }
   }
 
   @Builder
   private renderReferenceNineKeyKeyboard() {
-    Column({ space: 10 }) {
-      Row({ space: 8 }) {
+    Row({ space: 6 }) {
+      Column({ space: 6 }) {
         this.renderPunctuationRail()
 
-        Column({ space: 8 }) {
+        this.renderBottomActionKey('符号', this.showSymbolPalette, (): void => {
+          this.showSymbolPalette = !this.showSymbolPalette;
+        }, true, 1.18)
+      }
+      .width(70)
+      .height(this.resolveReferenceNineKeyHeight())
+
+      Column({ space: 6 }) {
+        Column({ space: 6 }) {
           ForEach(NINE_GRID_ROWS, (row: NineGridKeyDescriptor[]) => {
-            Row({ space: 8 }) {
+            Row({ space: 6 }) {
               ForEach(row, (descriptor: NineGridKeyDescriptor) => {
                 this.renderNineGridKey(descriptor)
               }, (descriptor: NineGridKeyDescriptor): string => `${descriptor.digit}-${descriptor.label}`)
             }
             .width('100%')
+            .height(this.resolveReferenceNineKeyRowHeight())
           }, (row: NineGridKeyDescriptor[]): string => `row-${row[0].digit}`)
         }
-        .layoutWeight(1)
+        .width('100%')
+        .height(this.resolveReferenceNineKeyGridHeight())
 
-        Column({ space: 8 }) {
-          this.renderSideActionKey('⌫', (): void => {
-            void imeRuntime.getSessionManager()?.pressBackspace();
-          })
+        Row({ space: 6 }) {
+          this.renderBottomActionKey(this.resolveQuickSwitchLabel(), false, (): void => {
+            this.switchQuickSubtype();
+          }, true, 1.16)
 
-          this.renderSideActionKey('清空', (): void => {
-            void imeRuntime.getSessionManager()?.clearActiveInput();
-          })
+          this.renderVoicePadKey()
 
-          this.renderTallSideActionKey('换行', (): void => {
-            void imeRuntime.getSessionManager()?.pressEnter();
-          })
+          this.renderBottomActionKey('123', false, (): void => {
+            if (this.supportsTwentySixKey()) {
+              void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
+            }
+          }, this.supportsTwentySixKey(), 1.18)
         }
-        .width(98)
+        .width('100%')
       }
-      .width('100%')
+      .layoutWeight(1)
+      .height(this.resolveReferenceNineKeyHeight())
 
-      Row({ space: 8 }) {
-        this.renderBottomActionKey('符号', this.showSymbolPalette, (): void => {
-          this.showSymbolPalette = !this.showSymbolPalette;
+      Column({ space: 6 }) {
+        this.renderSideActionKey('⌫', (): void => {
+          void imeRuntime.getSessionManager()?.pressBackspace();
         })
 
-        this.renderBottomActionKey(this.resolveQuickSwitchLabel(), false, (): void => {
-          this.switchQuickSubtype();
+        this.renderSideActionKey('清空', (): void => {
+          void imeRuntime.getSessionManager()?.clearActiveInput();
         })
 
-        this.renderVoicePadKey()
-
-        this.renderBottomActionKey(this.supportsTwentySixKey() ? '26键' : 'ABC', false, (): void => {
-          if (this.supportsTwentySixKey()) {
-            void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
-          }
-        }, this.supportsTwentySixKey())
+        this.renderTallSideActionKey('换行', (): void => {
+          void imeRuntime.getSessionManager()?.pressEnter();
+        })
       }
-      .width('100%')
+      .width(70)
+      .height(this.resolveReferenceNineKeyHeight())
     }
     .width('100%')
-    .padding(10)
-    .backgroundColor('#DCDCE0')
-    .borderRadius(24)
+    .height(this.resolveReferenceNineKeyHeight())
+    .padding({ left: 0, right: 0, top: 4, bottom: 0 })
   }
 
   @Builder
   private renderReferenceQwertyKeyboard() {
-    Column({ space: 8 }) {
-      this.renderQwertyRow(LETTER_ROW_TOP)
-      this.renderQwertyRowIndented(LETTER_ROW_MIDDLE, 18)
+    Column({ space: 6 }) {
+      Row({ space: 6 }) {
+        ForEach(QWERTY_TOP_KEYS, (descriptor: QwertyKeyDescriptor) => {
+          this.renderReferenceQwertyLetterKey(descriptor)
+        }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
+      }
+      .width('100%')
 
       Row({ space: 6 }) {
-        this.renderQwertyActionKey(this.supportsNineKey() ? '9键' : '，', (): void => {
-          if (this.supportsNineKey()) {
-            void imeRuntime.getSessionManager()?.switchKeyboardLayout('t9_9');
-          } else {
-            this.commitText('，');
-          }
-        })
+        ForEach(QWERTY_MIDDLE_KEYS, (descriptor: QwertyKeyDescriptor) => {
+          this.renderReferenceQwertyLetterKey(descriptor)
+        }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
+      }
+      .width('100%')
+      .padding({ left: 20, right: 20 })
 
-        ForEach(LETTER_ROW_BOTTOM, (key: string) => {
-          this.renderQwertyLetterKey(key)
-        }, (key: string): string => key)
+      Row({ space: 6 }) {
+        this.renderReferenceQwertySideKey('⇧', (): void => {
+          this.qwertyShiftEnabled = !this.qwertyShiftEnabled;
+        }, this.qwertyShiftEnabled)
 
-        this.renderQwertyActionKey('删除', (): void => {
+        ForEach(QWERTY_BOTTOM_KEYS, (descriptor: QwertyKeyDescriptor) => {
+          this.renderReferenceQwertyLetterKey(descriptor)
+        }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
+
+        this.renderReferenceQwertySideKey('⌫', (): void => {
           void imeRuntime.getSessionManager()?.pressBackspace();
         })
       }
       .width('100%')
 
-      Row({ space: 6 }) {
-        this.renderQwertyActionKey(this.resolveQuickSwitchLabel(), (): void => {
-          this.switchQuickSubtype();
-        })
-
-        this.renderQwertyActionKey('符号', (): void => {
+      Row({ space: 5 }) {
+        this.renderReferenceQwertyBottomActionKey('符号', (): void => {
           this.showSymbolPalette = !this.showSymbolPalette;
-        })
+        }, this.showSymbolPalette, 1.16)
 
-        Button('空格')
-          .layoutWeight(3)
-          .height(48)
-          .fontSize(16)
-          .fontColor('#1C1C1E')
-          .backgroundColor('#FFFFFF')
-          .borderRadius(18)
-          .onClick(() => {
-            this.commitText(' ');
-          })
+        this.renderReferenceQwertyBottomActionKey(this.resolveQuickSwitchLabel(), (): void => {
+          this.switchQuickSubtype();
+        }, false, 1.04)
 
-        this.renderQwertyActionKey('回车', (): void => {
+        this.renderReferenceQwertyPunctuationKey('!', this.resolveQwertyCommaLabel(), (): void => {
+          this.commitText(this.resolveQwertyCommaOutput());
+        }, 0.52)
+
+        this.renderReferenceQwertyVoiceKey()
+
+        this.renderReferenceQwertyPunctuationKey('?', this.resolveQwertyPeriodLabel(), (): void => {
+          this.commitText(this.resolveQwertyPeriodOutput());
+        }, 0.52)
+
+        this.renderReferenceQwertyBottomActionKey('123', (): void => {
+          if (this.supportsNineKey()) {
+            void imeRuntime.getSessionManager()?.switchKeyboardLayout('t9_9');
+          }
+        }, false, 0.96, this.supportsNineKey())
+
+        this.renderReferenceQwertyBottomActionKey('换行', (): void => {
           void imeRuntime.getSessionManager()?.pressEnter();
-        })
+        }, false, 1.16)
       }
       .width('100%')
     }
     .width('100%')
-    .padding(10)
-    .backgroundColor('#DCDCE0')
-    .borderRadius(24)
+    .height(this.resolveReferenceQwertyHeight())
+    .padding({ left: 0, right: 0, top: 6, bottom: 0 })
   }
 
   @Builder
   private renderVoicePanel() {
-    Column({ space: 12 }) {
-      Text(this.uiState.voiceState === 'recording' ? '正在监听，点按钮结束录音。' : '点击开始录音，识别结果会先进草稿。')
-        .fontSize(13)
-        .fontColor('#606168')
-        .width('100%')
-        .textAlign(TextAlign.Center)
-
-      Button(this.uiState.voiceState === 'recording' ? '停止录音' : '开始录音')
-        .width('100%')
-        .height(74)
-        .fontSize(18)
-        .fontColor('#FFFFFF')
-        .backgroundColor(this.uiState.voiceState === 'recording' ? '#B36D47' : '#7A835E')
-        .borderRadius(22)
-        .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
-        .onClick(() => {
-          this.startOrStopVoice();
-        })
-
-      Row({ space: 8 }) {
-        this.renderBottomActionKey(this.resolveQuickSwitchLabel(), false, (): void => {
-          this.switchQuickSubtype();
-        })
-
-        this.renderBottomActionKey('清空', false, (): void => {
-          void imeRuntime.getSessionManager()?.clearActiveInput();
-        })
-
-        this.renderBottomActionKey('回车', false, (): void => {
-          void imeRuntime.getSessionManager()?.pressEnter();
-        })
+    Column({ space: 16 }) {
+      Button() {
+        if (this.uiState.voiceState === 'recording') {
+          Text('●')
+            .fontSize(48)
+            .fontColor('#FFFFFF')
+        } else {
+          this.renderIconAsset('mic', 48, 48)
+        }
       }
-      .width('100%')
+      .width(120)
+      .height(120)
+      .type(ButtonType.Circle)
+      .backgroundColor(
+        this.uiState.voiceState === 'recording' ? '#B36D47' :
+        this.uiState.voiceState === 'error' ? '#D9534F' : '#7A835E'
+      )
+      .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
+      .onClick(() => {
+        this.startOrStopVoice();
+      })
+
+      if (this.uiState.voiceStatusText.length > 0) {
+        Text(this.uiState.voiceStatusText)
+          .fontSize(12)
+          .fontColor(this.uiState.voiceState === 'error' ? '#D9534F' : '#606168')
+          .textAlign(TextAlign.Center)
+      }
     }
     .width('100%')
-    .padding(14)
-    .backgroundColor('#DCDCE0')
-    .borderRadius(24)
+    .layoutWeight(1)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
-  private renderTopIconButton(label: string, active: boolean, action: () => void, enabled: boolean = true) {
+  private renderBottomDock() {
+    Row() {
+      this.renderBottomDockIcon('globe', (): void => {
+        this.switchQuickSubtype();
+      })
+
+      Blank()
+        .layoutWeight(1)
+
+      this.renderBottomDockIcon('magic', (): void => {
+        this.handlePrimaryToolbarAction();
+      }, this.canUsePrimaryAction())
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .padding({ left: 20, right: 20, top: 8, bottom: 6 })
+  }
+
+  @Builder
+  private renderBottomDockIcon(kind: string, action: () => void, enabled: boolean = true) {
+    Column() {
+      this.renderIconAsset(kind, 30, 30, enabled ? 1 : 0.42)
+    }
+    .width(42)
+    .height(34)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .opacity(enabled ? 1 : 0.55)
+    .onClick(() => {
+      if (enabled) {
+        action();
+      }
+    })
+  }
+
+  @Builder
+  private renderHeaderOutlineButton(label: string, action: () => void, enabled: boolean = true) {
     Button(label)
-      .width(46)
-      .height(46)
-      .fontSize(label.length > 1 ? 15 : 22)
+      .width(36)
+      .height(36)
+      .fontSize(label === '+' ? 18 : 15)
       .fontWeight(FontWeight.Medium)
-      .fontColor(enabled ? '#1B1B1D' : '#B1B3B9')
-      .backgroundColor(active ? '#E7EEE0' : '#F4F4F1')
-      .borderRadius(23)
-      .opacity(enabled ? 1 : 0.55)
+      .fontColor(enabled ? '#1C1C1F' : '#C3C4CA')
+      .backgroundColor('#FFFFFF')
+      .border({
+        width: enabled ? 1.5 : 1,
+        color: enabled ? '#1C1C1F' : '#D7D8DD'
+      })
+      .borderRadius(16)
+      .opacity(enabled ? 1 : 0.5)
       .onClick(() => {
         if (enabled) {
           action();
@@ -668,66 +1108,281 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderFeatureButton(label: string, active: boolean, action: () => void, enabled: boolean = true) {
+  private renderReferenceQwertyHeaderButton(label: string, action: () => void, enabled: boolean = true) {
     Button(label)
-      .layoutWeight(1)
-      .height(44)
-      .fontSize(label.length > 1 ? 13 : 18)
+      .width(38)
+      .height(38)
+      .fontSize(label === '+' ? 18 : 16)
       .fontWeight(FontWeight.Medium)
-      .fontColor(enabled ? '#44464D' : '#B8BAC0')
-      .backgroundColor(active ? '#FFFFFF' : '#ECECEF')
-      .borderRadius(14)
-      .opacity(enabled ? 1 : 0.55)
+      .fontColor(enabled ? '#1C1D21' : '#C9CBD3')
+      .backgroundColor('#FFFFFF')
+      .border({
+        width: 1.5,
+        color: enabled ? '#1C1D21' : '#D4D6DC'
+      })
+      .borderRadius(19)
+      .opacity(enabled ? 1 : 0.52)
       .onClick(() => {
         if (enabled) {
           action();
         }
       })
+  }
+
+  @Builder
+  private renderHeaderSendButton() {
+    Button('↑')
+      .width(32)
+      .height(32)
+      .fontSize(17)
+      .fontWeight(FontWeight.Medium)
+      .fontColor(this.canUseSendAction() ? '#FFFFFF' : '#F7FBF2')
+      .backgroundColor(this.canUseSendAction() ? '#DAEBC4' : '#EEF5E5')
+      .borderRadius(16)
+      .opacity(this.canUseSendAction() ? 1 : 0.72)
+      .onClick(() => {
+        if (this.canUseSendAction()) {
+          this.handleSendAction();
+        }
+      })
+  }
+
+  @Builder
+  private renderFeatureIconButton(
+    label: string,
+    action: () => void,
+    active: boolean = false,
+    enabled: boolean = true,
+    fontSize: number = 18
+  ) {
+    Text(label)
+      .fontSize(fontSize)
+      .fontColor(enabled ? (active ? '#1B1D22' : '#5D6069') : '#BABCC3')
+      .width(40)
+      .height(28)
+      .textAlign(TextAlign.Center)
+      .onClick(() => {
+        if (enabled) {
+          action();
+        }
+      })
+  }
+
+  @Builder
+  private renderFeatureIconAssetButton(
+    kind: string,
+    action: () => void,
+    active: boolean = false,
+    enabled: boolean = true
+  ) {
+    Column() {
+      this.renderIconAsset(kind, this.resolveFeatureIconWidth(kind), 28, enabled ? 1 : 0.32)
+    }
+    .width(this.resolveFeatureButtonWidth(kind))
+    .height(34)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor(active ? '#EBF1E2' : 'rgba(0,0,0,0)')
+    .borderRadius(17)
+    .opacity(enabled ? 1 : 0.55)
+    .onClick(() => {
+      if (enabled) {
+        action();
+      }
+    })
+  }
+
+  @Builder
+  private renderIconAsset(kind: string, width: number, height: number, opacity: number = 1) {
+    if (kind === 'tool') {
+      Image($r('app.media.ime_icon_feature_tool'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'mic') {
+      Image($r('app.media.ime_icon_feature_mic'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'style') {
+      Image($r('app.media.ime_icon_feature_style'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'smile') {
+      Image($r('app.media.ime_icon_feature_smile'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'chevron') {
+      Image($r('app.media.ime_icon_feature_chevron_down'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'shift') {
+      Image($r('app.media.ime_icon_key_shift'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'backspace') {
+      Image($r('app.media.ime_icon_key_backspace'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'voicepad') {
+      Image($r('app.media.ime_icon_key_voicepad'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'globe') {
+      Image($r('app.media.ime_icon_bottom_globe'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'magic') {
+      Image($r('app.media.ime_icon_bottom_magic'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    }
+  }
+
+  @Builder
+  private renderSettingsIconAsset(kind: string, width: number, height: number, opacity: number = 1) {
+    if (kind === 'collapse') {
+      Image($r('app.media.ime_icon_settings_chevron_up'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'help') {
+      Image($r('app.media.ime_icon_settings_help'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'gear') {
+      Image($r('app.media.ime_icon_settings_gear'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'clipboard') {
+      Image($r('app.media.ime_icon_settings_clipboard'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'edit') {
+      Image($r('app.media.ime_icon_settings_edit'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'lexicon') {
+      Image($r('app.media.ime_icon_settings_lexicon'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'font') {
+      Image($r('app.media.ime_icon_settings_font'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'sound') {
+      Image($r('app.media.ime_icon_settings_sound'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'skin') {
+      Image($r('app.media.ime_icon_settings_skin'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'voice') {
+      Image($r('app.media.ime_icon_feature_mic'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else {
+      Text(kind)
+        .fontSize(kind.length > 1 ? 18 : 24)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#1D1E22')
+        .opacity(opacity)
+    }
   }
 
   @Builder
   private renderPunctuationRail() {
-    Column({ space: 18 }) {
+    Column({ space: 9 }) {
       ForEach(SIDE_PUNCTUATIONS, (symbol: string) => {
         Text(symbol)
-          .fontSize(24)
+          .fontSize(15)
           .fontColor('#171717')
           .width('100%')
           .textAlign(TextAlign.Center)
+          .padding({ top: 4, bottom: 4 })
+          .borderRadius(10)
+          .stateStyles({ pressed: this.pressedWhiteKeyStyle })
           .onClick(() => {
             this.commitText(symbol);
           })
       }, (symbol: string): string => symbol)
     }
     .justifyContent(FlexAlign.SpaceAround)
-    .width(76)
-    .height(252)
-    .padding({ top: 16, bottom: 16 })
+    .width(64)
+    .height(this.resolveReferenceNineKeyGridHeight())
+    .padding({ top: 12, bottom: 12 })
     .backgroundColor('#FFFFFF')
-    .borderRadius(22)
+    .border({ width: 1, color: '#F6F7F9' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
   }
 
   @Builder
   private renderNineGridKey(descriptor: NineGridKeyDescriptor) {
-    Column({ space: 6 }) {
+    Column({ space: 4 }) {
       Text(descriptor.digit)
-        .fontSize(12)
+        .fontSize(10)
         .fontColor('#9B9CA3')
 
       Text(descriptor.label)
-        .fontSize(descriptor.label.length > 2 ? 22 : 26)
+        .fontSize(descriptor.label.length > 2 ? 19 : 22)
         .fontWeight(FontWeight.Medium)
         .fontColor('#161616')
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .layoutWeight(1)
-    .height(78)
+    .height(this.resolveReferenceNineKeyRowHeight())
     .backgroundColor('#FFFFFF')
-    .borderRadius(20)
+    .border({ width: 1, color: '#F6F7F9' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
+      let sessionManager = imeRuntime.getSessionManager();
+      hilog.info(PANEL_DOMAIN, PANEL_TAG,
+        'nineGridKey click digit=%{public}s action=%{public}s sessionManagerPresent=%{public}s',
+        descriptor.digit, descriptor.action, sessionManager ? 'true' : 'false');
       if (descriptor.action === 'digit') {
-        void imeRuntime.getSessionManager()?.typeNineKeyDigit(descriptor.value);
+        void sessionManager?.typeNineKeyDigit(descriptor.value);
       } else {
         this.commitText(descriptor.value);
       }
@@ -736,76 +1391,99 @@ struct KeyboardPanel {
 
   @Builder
   private renderSideActionKey(label: string, action: () => void) {
-    Button(label)
-      .width('100%')
-      .height(78)
-      .fontSize(label === '⌫' ? 30 : 20)
-      .fontWeight(FontWeight.Medium)
-      .fontColor('#262626')
-      .backgroundColor('#C9CAD1')
-      .borderRadius(20)
-      .onClick(() => {
-        action();
-      })
+    Button() {
+      if (label === '⌫') {
+        this.renderIconAsset('backspace', 36, 28)
+      } else {
+        Text(label)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#262626')
+      }
+    }
+    .width('100%')
+    .height(this.resolveReferenceNineKeyRowHeight())
+    .backgroundColor('#C9CAD3')
+    .border({ width: 1, color: '#CDD1D8' })
+    .borderRadius(18)
+    .shadow(this.resolveGrayKeyShadow())
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .onClick(() => {
+      hilog.info(PANEL_DOMAIN, PANEL_TAG, 'sideActionKey click label=%{public}s', label);
+      action();
+    })
   }
 
   @Builder
   private renderTallSideActionKey(label: string, action: () => void) {
     Button(label)
       .width('100%')
-      .height(164)
-      .fontSize(20)
+      .height(this.resolveReferenceNineKeyTallActionHeight())
+      .fontSize(16)
       .fontWeight(FontWeight.Medium)
       .fontColor('#262626')
-      .backgroundColor('#C9CAD1')
-      .borderRadius(20)
+      .backgroundColor('#C9CAD3')
+      .border({ width: 1, color: '#CDD1D8' })
+      .borderRadius(18)
+      .shadow(this.resolveGrayKeyShadow())
+      .stateStyles({ pressed: this.pressedGrayKeyStyle })
       .onClick(() => {
         action();
       })
   }
 
   @Builder
-  private renderBottomActionKey(label: string, active: boolean, action: () => void, enabled: boolean = true) {
-    Button(label)
-      .layoutWeight(1)
-      .height(70)
-      .fontSize(label.length > 2 ? 16 : 18)
-      .fontWeight(FontWeight.Medium)
-      .fontColor(enabled ? '#202020' : '#B0B2B8')
-      .backgroundColor(active ? '#D8E1D1' : '#C9CAD1')
-      .borderRadius(20)
-      .opacity(enabled ? 1 : 0.55)
-      .onClick(() => {
-        if (enabled) {
-          action();
-        }
-      })
+  private renderBottomActionKey(
+    label: string,
+    active: boolean,
+    action: () => void,
+    enabled: boolean = true,
+    weight: number = 1
+  ) {
+    Button() {
+      if (label === this.resolveQuickSwitchLabel()) {
+        this.renderNineQuickSwitchLabel(enabled)
+      } else {
+        Text(label)
+          .fontSize(this.resolveBottomActionFontSize(label))
+          .fontWeight(FontWeight.Medium)
+          .fontColor(enabled ? '#202020' : '#B0B2B8')
+      }
+    }
+    .layoutWeight(weight)
+    .height(this.resolveReferenceNineKeyBottomHeight())
+    .backgroundColor(active ? '#D8E1D1' : '#C9CAD3')
+    .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
+    .borderRadius(18)
+    .shadow(this.resolveGrayKeyShadow())
+    .opacity(enabled ? 1 : 0.55)
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .onClick(() => {
+      if (enabled) {
+        action();
+      }
+    })
   }
 
   @Builder
   private renderVoicePadKey() {
     Column({ space: 4 }) {
       Text('0')
-        .fontSize(12)
+        .fontSize(10)
         .fontColor('#9B9CA3')
 
-      Text(this.uiState.voiceState === 'recording' ? '停止语音' : '麦克风')
-        .fontSize(20)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#181818')
-
-      Text(this.uiState.voiceEnabled ? this.resolveVoicePadSubline() : '当前字段不可用')
-        .fontSize(10)
-        .fontColor('#7A7C82')
-        .maxLines(1)
+      this.renderIconAsset('voicepad', 62, 34)
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-    .layoutWeight(2.1)
-    .height(70)
+    .layoutWeight(1.72)
+    .height(this.resolveReferenceNineKeyBottomHeight())
     .backgroundColor('#FFFFFF')
-    .borderRadius(22)
+    .border({ width: 1, color: '#F6F7F9' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
     .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
       if (this.uiState.voiceEnabled) {
         this.startOrStopVoice();
@@ -816,58 +1494,306 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderQwertyRow(keys: string[]) {
-    Row({ space: 6 }) {
-      ForEach(keys, (key: string) => {
-        this.renderQwertyLetterKey(key)
-      }, (key: string): string => key)
-    }
-    .width('100%')
-  }
+  private renderReferenceQwertyLetterKey(descriptor: QwertyKeyDescriptor) {
+    Column({ space: 3 }) {
+      Text(descriptor.hint)
+        .fontSize(10)
+        .fontColor('#A4A6AD')
 
-  @Builder
-  private renderQwertyRowIndented(keys: string[], inset: number) {
-    Row({ space: 6 }) {
-      ForEach(keys, (key: string) => {
-        this.renderQwertyLetterKey(key)
-      }, (key: string): string => `${inset}-${key}`)
-    }
-    .width('100%')
-    .padding({ left: inset, right: inset })
-  }
-
-  @Builder
-  private renderQwertyLetterKey(key: string) {
-    Column() {
-      Text(key.toUpperCase())
-        .fontSize(19)
+      Text(descriptor.label)
+        .fontSize(24)
         .fontWeight(FontWeight.Medium)
-        .fontColor('#181818')
+        .fontColor('#17181C')
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .layoutWeight(1)
-    .height(46)
+    .height(this.resolveReferenceQwertyRowHeight())
     .backgroundColor('#FFFFFF')
-    .borderRadius(16)
+    .border({ width: 1, color: '#F6F7F9' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
-      this.commitText(key);
+      this.handleReferenceQwertyLetterInput(descriptor.value);
     })
   }
 
   @Builder
-  private renderQwertyActionKey(label: string, action: () => void) {
-    Button(label)
-      .layoutWeight(1.15)
-      .height(46)
-      .fontSize(14)
-      .fontWeight(FontWeight.Medium)
-      .fontColor('#323338')
-      .backgroundColor('#C9CAD1')
-      .borderRadius(16)
-      .onClick(() => {
+  private renderReferenceQwertySideKey(label: string, action: () => void, active: boolean = false) {
+    Button() {
+      if (label === '⌫') {
+        this.renderIconAsset('backspace', 34, 28)
+      } else {
+        this.renderIconAsset('shift', 34, 28)
+      }
+    }
+    .width(58)
+    .height(this.resolveReferenceQwertyRowHeight())
+    .backgroundColor(active ? '#D9E3D0' : '#C9CAD3')
+    .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
+    .borderRadius(18)
+    .shadow(this.resolveGrayKeyShadow())
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderReferenceQwertyBottomActionKey(
+    label: string,
+    action: () => void,
+    active: boolean = false,
+    weight: number = 1,
+    enabled: boolean = true
+  ) {
+    Button() {
+      this.renderActionKeyLabel(label, this.resolveReferenceQwertyBottomFontSize(label), enabled)
+    }
+    .layoutWeight(weight)
+    .height(this.resolveReferenceQwertyBottomHeight())
+    .backgroundColor(active ? '#D9E3D0' : '#C9CAD3')
+    .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
+    .borderRadius(18)
+    .shadow(this.resolveGrayKeyShadow())
+    .opacity(enabled ? 1 : 0.52)
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .onClick(() => {
+      if (enabled) {
         action();
-      })
+      }
+    })
+  }
+
+  @Builder
+  private renderActionKeyLabel(label: string, fontSize: number, enabled: boolean) {
+    if (label === this.resolveQuickSwitchLabel()) {
+      Row({ space: 0 }) {
+        Text('中')
+          .fontSize(fontSize + 5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(enabled ? '#1E2024' : '#B5B7BE')
+
+        Text('/英')
+          .fontSize(fontSize - 1)
+          .fontWeight(FontWeight.Regular)
+          .fontColor(enabled ? '#8D919A' : '#C3C5CB')
+          .margin({ top: 5 })
+      }
+      .alignItems(VerticalAlign.Center)
+    } else {
+      Text(label)
+        .fontSize(fontSize)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(enabled ? '#232429' : '#B5B7BE')
+        .maxLines(1)
+    }
+  }
+
+  @Builder
+  private renderNineQuickSwitchLabel(enabled: boolean) {
+    Row({ space: 0 }) {
+      Text('中')
+        .fontSize(17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(enabled ? '#1F2024' : '#B5B7BE')
+
+      Text('/英')
+        .fontSize(9)
+        .fontWeight(FontWeight.Regular)
+        .fontColor(enabled ? '#8E9199' : '#C3C5CB')
+        .margin({ top: 5 })
+    }
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private renderReferenceQwertyPunctuationKey(
+    hint: string,
+    label: string,
+    action: () => void,
+    weight: number = 0.76
+  ) {
+    Column({ space: 4 }) {
+      Text(hint)
+        .fontSize(10)
+        .fontColor('#A4A6AD')
+
+      Text(label)
+        .fontSize(20)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#16171B')
+    }
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .layoutWeight(weight)
+    .height(this.resolveReferenceQwertyBottomHeight())
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#F6F7F9' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderReferenceQwertyVoiceKey() {
+    Column() {
+      this.renderIconAsset('voicepad', 84, 36)
+    }
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .layoutWeight(1.28)
+    .height(this.resolveReferenceQwertyBottomHeight())
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#F6F7F9' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
+    .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
+    .onClick(() => {
+      if (this.uiState.voiceEnabled) {
+        this.startOrStopVoice();
+      } else {
+        this.commitText(' ');
+      }
+    })
+  }
+
+  private resolveReferenceNineKeyHeight(): number {
+    return 226;
+  }
+
+  private resolveReferenceNineKeyGridHeight(): number {
+    return 168;
+  }
+
+  private resolveReferenceNineKeyRowHeight(): number {
+    return 52;
+  }
+
+  private resolveReferenceNineKeyBottomHeight(): number {
+    return 50;
+  }
+
+  private resolveReferenceNineKeyTallActionHeight(): number {
+    return 108;
+  }
+
+  private resolveWhiteKeyShadow(): ShadowOptions {
+    return {
+      radius: 1.2,
+      color: '#30000000',
+      offsetX: 0,
+      offsetY: 2
+    };
+  }
+
+  private resolveGrayKeyShadow(): ShadowOptions {
+    return {
+      radius: 1.2,
+      color: '#24000000',
+      offsetX: 0,
+      offsetY: 2
+    };
+  }
+
+  private resolveSettingsTabShadow(selected: boolean): ShadowOptions {
+    if (selected) {
+      return this.resolveWhiteKeyShadow();
+    }
+    return {
+      radius: 0,
+      color: '#00000000',
+      offsetX: 0,
+      offsetY: 0
+    };
+  }
+
+  private resolveFeatureButtonWidth(kind: string): number {
+    if (kind === 'tool') {
+      return 40;
+    }
+    if (kind === 'chevron') {
+      return 36;
+    }
+    return 38;
+  }
+
+  private resolveFeatureIconWidth(kind: string): number {
+    if (kind === 'tool') {
+      return 30;
+    }
+    if (kind === 'chevron') {
+      return 26;
+    }
+    return 28;
+  }
+
+  private resolveBottomActionFontSize(label: string): number {
+    if (label === '中/英') {
+      return 10;
+    }
+    if (label === '符号') {
+      return 14;
+    }
+    if (label === '123') {
+      return 14;
+    }
+    return label.length > 2 ? 12 : 14;
+  }
+
+  private resolveReferenceQwertyHeight(): number {
+    return 252;
+  }
+
+  private resolveReferenceQwertyRowHeight(): number {
+    return 52;
+  }
+
+  private resolveReferenceQwertyBottomHeight(): number {
+    return 50;
+  }
+
+  private resolveReferenceQwertyBottomFontSize(label: string): number {
+    if (label === '中/英') {
+      return 10;
+    }
+    if (label === '换行' || label === '符号') {
+      return 13;
+    }
+    if (label === '123') {
+      return 12;
+    }
+    return label.length > 2 ? 11 : 13;
+  }
+
+  private handleReferenceQwertyLetterInput(value: string): void {
+    let committed = value;
+    if (this.qwertyShiftEnabled && this.isEnglishSubtype()) {
+      committed = value.toUpperCase();
+      this.qwertyShiftEnabled = false;
+    }
+    this.commitText(committed);
+  }
+
+  private resolveQwertyCommaLabel(): string {
+    return this.isEnglishSubtype() ? ',' : '，';
+  }
+
+  private resolveQwertyPeriodLabel(): string {
+    return this.isEnglishSubtype() ? '.' : '。';
+  }
+
+  private resolveQwertyCommaOutput(): string {
+    return this.isEnglishSubtype() ? ',' : '，';
+  }
+
+  private resolveQwertyPeriodOutput(): string {
+    return this.isEnglishSubtype() ? '.' : '。';
   }
 
   private handlePrimaryToolbarAction(): void {
@@ -888,6 +1814,13 @@ struct KeyboardPanel {
     }
   }
 
+  private canUsePrimaryAction(): boolean {
+    return this.uiState.voiceDraftText.length > 0 ||
+      this.uiState.showPolishSuggestion ||
+      (this.uiState.polishEnabled && this.uiState.canPolish && !this.uiState.isPolishRunning) ||
+      this.uiState.candidates.length > 0;
+  }
+
   private handleSendAction(): void {
     if (this.uiState.voiceDraftText.length > 0) {
       void imeRuntime.getSessionManager()?.insertVoiceDraft();
@@ -896,9 +1829,18 @@ struct KeyboardPanel {
     void imeRuntime.getSessionManager()?.pressEnter();
   }
 
+  private canUseSendAction(): boolean {
+    return this.uiState.sessionActive || this.uiState.voiceDraftText.length > 0;
+  }
+
   private startOrStopVoice(): void {
     if (this.uiState.voiceState === 'recording') {
       void imeRuntime.getSessionManager()?.stopVoiceInput();
+      return;
+    }
+    if (this.uiState.voiceState === 'processing') {
+      // 处理中状态下点击，取消当前语音处理
+      void imeRuntime.getSessionManager()?.clearActiveInput();
       return;
     }
     if (this.uiState.voiceState === 'idle' || this.uiState.voiceState === 'error') {
@@ -926,6 +1868,33 @@ struct KeyboardPanel {
     void imeRuntime.getSessionManager()?.switchKeyboardLayout(target.id);
   }
 
+  private toggleReferenceLayoutStyle(): void {
+    if (this.uiState.keyboardLayout === 't9_9' && this.supportsTwentySixKey()) {
+      void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
+      return;
+    }
+    if (this.uiState.keyboardLayout === 'qwerty_26' && this.supportsNineKey()) {
+      void imeRuntime.getSessionManager()?.switchKeyboardLayout('t9_9');
+      return;
+    }
+    this.cycleKeyboardLayout();
+  }
+
+  private toggleSettingsOverlay(): void {
+    if (this.showSettingsTray) {
+      this.closeSettingsOverlay();
+      return;
+    }
+    this.showSettingsTray = true;
+    this.activeSettingsTab = 'common';
+    this.showSymbolPalette = false;
+  }
+
+  private closeSettingsOverlay(): void {
+    this.showSettingsTray = false;
+    this.activeSettingsTab = 'common';
+  }
+
   private supportsNineKey(): boolean {
     return this.hasLayoutOption('t9_9');
   }
@@ -944,11 +1913,11 @@ struct KeyboardPanel {
   }
 
   private resolveQuickSwitchLabel(): string {
-    return this.uiState.currentSubtypeId.startsWith('en-') ? '拼音' : '中/英';
+    return '中/英';
   }
 
-  private resolveQuickSwitchIconLabel(): string {
-    return this.uiState.currentSubtypeId.startsWith('en-') ? '中' : 'EN';
+  private isEnglishSubtype(): boolean {
+    return this.uiState.currentSubtypeId.startsWith('en-');
   }
 
   private switchQuickSubtype(): void {
@@ -957,6 +1926,19 @@ struct KeyboardPanel {
       return;
     }
     void imeRuntime.getSessionManager()?.switchSubtype(targetSubtype);
+  }
+
+  private switchSettingsSubtype(preferredSubtypeId: string): void {
+    let targetSubtype = this.findSubtypeById(preferredSubtypeId);
+    if (targetSubtype.length === 0) {
+      targetSubtype = preferredSubtypeId.startsWith('zh') ? this.findFirstSubtypeByLocale('zh') :
+        this.findFirstSubtypeByLocale('en');
+    }
+    if (targetSubtype.length === 0) {
+      return;
+    }
+    void imeRuntime.getSessionManager()?.switchSubtype(targetSubtype);
+    this.closeSettingsOverlay();
   }
 
   private resolveQuickSwitchSubtypeId(): string {
@@ -1002,7 +1984,7 @@ struct KeyboardPanel {
     if (this.uiState.candidates.length > 0) {
       return this.uiState.candidates[0].text;
     }
-    return '开始输入';
+    return '';
   }
 
   private resolveComposeSubline(): string {
@@ -1012,26 +1994,23 @@ struct KeyboardPanel {
     if (this.uiState.showPolishSuggestion) {
       return '有润色建议待处理';
     }
-    if (this.uiState.preedit.length > 0) {
+    if (this.uiState.preedit.length > 0 || this.uiState.candidates.length > 0) {
       return `候选第 ${this.uiState.candidatePageNo + 1} 页`;
     }
     if (this.uiState.activeNineKeySpelling.length > 0 || this.uiState.nineKeySequence.length > 0) {
       return this.uiState.nineKeySequence.length > 0 ? `9 键编码 ${this.uiState.nineKeySequence}` : '9 键拼音';
     }
-    if (this.uiState.sessionActive) {
-      return `${this.uiState.currentSubtypeName} · ${this.resolveLayoutDisplayLabel(this.uiState.keyboardLayout)}`;
-    }
-    return '等待 inputStart';
+    return '';
   }
 
   private resolveCandidatePlaceholder(): string {
     if (this.uiState.activeNineKeySpelling.length > 0 || this.uiState.nineKeySequence.length > 0) {
-      return '继续输入 9 键拼音，候选会显示在这里。';
+      return '继续输入 9 键拼音';
     }
     if (this.uiState.sessionActive) {
-      return '输入拼音或英文后，这里会显示候选。';
+      return '输入后显示候选';
     }
-    return '等待输入法会话绑定。';
+    return '等待输入';
   }
 
   private resolveLayoutIconLabel(): string {
@@ -1041,7 +2020,7 @@ struct KeyboardPanel {
       case 'voice_panel':
         return '语';
       default:
-        return '26';
+        return '123';
     }
   }
 
@@ -1056,16 +2035,21 @@ struct KeyboardPanel {
     }
   }
 
-  private resolveVoicePadSubline(): string {
-    switch (this.uiState.voiceState) {
-      case 'recording':
-        return '点击停止';
-      case 'processing':
-        return '正在转写';
-      case 'error':
-        return '可再次尝试';
-      default:
-        return '语音输入';
+  private shouldShowCandidateStrip(): boolean {
+    return this.showSymbolPalette ||
+      this.uiState.preedit.length > 0 ||
+      this.uiState.candidates.length > 0 ||
+      this.uiState.activeNineKeySpelling.length > 0 ||
+      this.uiState.nineKeySpellings.length > 0;
+  }
+
+  private resolveSettingsPagerIndex(): number {
+    if (this.activeSettingsTab === 'input') {
+      return 1;
     }
+    if (this.activeSettingsTab === 'layout') {
+      return 2;
+    }
+    return 0;
   }
 }

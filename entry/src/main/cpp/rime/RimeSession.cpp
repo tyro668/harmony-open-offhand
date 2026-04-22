@@ -11,6 +11,8 @@
 #include <rime_api.h>
 
 namespace {
+constexpr const char *kExpectedSchemaId = "offhand_pinyin";
+
 struct RuntimeState {
     std::mutex mutex;
     RimeApi *api = nullptr;
@@ -73,6 +75,26 @@ bool EnsureDirectory(const std::string &path, std::string &error_message)
     return false;
 }
 
+void ResetPath(const std::string &path)
+{
+    if (path.empty()) {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::remove_all(path, error);
+    error.clear();
+    std::filesystem::create_directories(path, error);
+}
+
+void RemoveFileIfExists(const std::string &path)
+{
+    if (path.empty()) {
+        return;
+    }
+    std::error_code error;
+    std::filesystem::remove(path, error);
+}
+
 bool ParseSessionId(const std::string &session_id, RimeSessionId &out)
 {
     if (session_id.empty()) {
@@ -114,6 +136,124 @@ void FillTraits(RimeTraits &traits)
     traits.log_dir = g_runtime.log_dir.c_str();
     traits.prebuilt_data_dir = g_runtime.prebuilt_data_dir.c_str();
     traits.staging_dir = g_runtime.staging_dir.c_str();
+}
+
+std::string CollectSchemaListUnlocked(RimeApi *api)
+{
+    if (api == nullptr || !RIME_API_AVAILABLE(api, get_schema_list)) {
+        return "";
+    }
+    RimeSchemaList schema_list = {0};
+    if (!api->get_schema_list(&schema_list)) {
+        return "";
+    }
+    std::string summary;
+    for (size_t index = 0; index < schema_list.size; index++) {
+        const char *schema_id = schema_list.list[index].schema_id != nullptr ? schema_list.list[index].schema_id : "";
+        const char *schema_name = schema_list.list[index].name != nullptr ? schema_list.list[index].name : "";
+        if (!summary.empty()) {
+            summary += ",";
+        }
+        summary += schema_id;
+        if (schema_name[0] != '\0') {
+            summary += "/";
+            summary += schema_name;
+        }
+    }
+    api->free_schema_list(&schema_list);
+    return summary;
+}
+
+bool HasSchemaUnlocked(RimeApi *api, const std::string &schema_id)
+{
+    if (schema_id.empty() || api == nullptr || !RIME_API_AVAILABLE(api, get_schema_list)) {
+        return false;
+    }
+    RimeSchemaList schema_list = {0};
+    if (!api->get_schema_list(&schema_list)) {
+        return false;
+    }
+    bool found = false;
+    for (size_t index = 0; index < schema_list.size; index++) {
+        const char *current_schema_id = schema_list.list[index].schema_id;
+        if (current_schema_id != nullptr && schema_id == current_schema_id) {
+            found = true;
+            break;
+        }
+    }
+    api->free_schema_list(&schema_list);
+    return found;
+}
+
+offhand::rime::State SnapshotStateUnlocked(RimeSessionId session_id);
+
+bool ProbeSchemaUnlocked(RimeApi *api, const std::string &schema_id, std::string &probe_summary)
+{
+    if (api == nullptr) {
+        probe_summary = "api=null";
+        return false;
+    }
+    RimeSessionId session_id = api->create_session();
+    if (!session_id) {
+        probe_summary = "create_session failed";
+        return false;
+    }
+    bool selected = schema_id.empty() || api->select_schema(session_id, schema_id.c_str());
+    if (!selected) {
+        api->destroy_session(session_id);
+        probe_summary = "select_schema failed";
+        return false;
+    }
+    api->set_option(session_id, "ascii_mode", False);
+    api->clear_composition(session_id);
+    constexpr char kProbeInput[] = "jijie";
+    for (char ch : kProbeInput) {
+        api->process_key(session_id, ch, 0);
+    }
+    offhand::rime::State state = SnapshotStateUnlocked(session_id);
+    api->destroy_session(session_id);
+    probe_summary = "raw=" + state.raw_input + ";preedit=" + state.composing_text +
+        ";candidates=" + std::to_string(state.candidates.size());
+    if (!state.candidates.empty()) {
+        probe_summary += ";first=" + state.candidates.front().text;
+    }
+    return !state.candidates.empty();
+}
+
+bool RepairDeploymentUnlocked(RimeApi *api, std::string &repair_summary)
+{
+    ResetPath(g_runtime.prebuilt_data_dir);
+    ResetPath(g_runtime.staging_dir);
+    RemoveFileIfExists(g_runtime.user_data_dir + "/installation.yaml");
+    std::string failure_reason;
+    bool deployed = false;
+    if (RIME_API_AVAILABLE(api, deploy)) {
+        deployed = api->deploy() == True;
+        if (!deployed) {
+            failure_reason = "deploy() returned false";
+        }
+    }
+    if (!deployed && RIME_API_AVAILABLE(api, start_maintenance)) {
+        deployed = api->start_maintenance(True) == True;
+        if (deployed && RIME_API_AVAILABLE(api, join_maintenance_thread)) {
+            api->join_maintenance_thread();
+        }
+        if (!deployed) {
+            failure_reason = "start_maintenance(True) returned false";
+        }
+    }
+    if (deployed && !HasSchemaUnlocked(api, kExpectedSchemaId) && RIME_API_AVAILABLE(api, deploy_schema)) {
+        deployed = api->deploy_schema("offhand_pinyin.schema.yaml") == True;
+        if (!deployed) {
+            failure_reason = "deploy_schema(offhand_pinyin.schema.yaml) returned false";
+        }
+    }
+    if (!deployed) {
+        repair_summary = failure_reason;
+        return false;
+    }
+    repair_summary = "repair deploy ok";
+    return true;
 }
 
 offhand::rime::State SnapshotStateUnlocked(RimeSessionId session_id)
@@ -304,10 +444,55 @@ std::string DeployIfNeeded()
         return StringifyStatus(false, "bridge not initialized");
     }
     if (!g_runtime.deployed) {
-        if (api->start_maintenance(True)) {
-            api->join_maintenance_thread();
+        bool deployed = false;
+        std::string failure_reason;
+        if (RIME_API_AVAILABLE(api, deploy)) {
+            deployed = api->deploy() == True;
+            if (!deployed) {
+                failure_reason = "deploy() returned false";
+            }
+        }
+        if (!deployed && RIME_API_AVAILABLE(api, start_maintenance)) {
+            deployed = api->start_maintenance(True) == True;
+            if (deployed && RIME_API_AVAILABLE(api, join_maintenance_thread)) {
+                api->join_maintenance_thread();
+            }
+            if (!deployed) {
+                failure_reason = "start_maintenance(True) returned false";
+            }
+        }
+        if (deployed && !HasSchemaUnlocked(api, kExpectedSchemaId) &&
+            RIME_API_AVAILABLE(api, deploy_schema)) {
+            deployed = api->deploy_schema("offhand_pinyin.schema.yaml") == True;
+            if (!deployed) {
+                failure_reason = "deploy_schema(offhand_pinyin.schema.yaml) returned false";
+            }
+        }
+        std::string schema_list = CollectSchemaListUnlocked(api);
+        if (!deployed) {
+            return StringifyStatus(false, failure_reason + "; schemas=" + schema_list);
+        }
+        if (!HasSchemaUnlocked(api, kExpectedSchemaId)) {
+            return StringifyStatus(false, "expected schema missing after deploy; schemas=" + schema_list);
+        }
+        std::string probe_summary;
+        if (!ProbeSchemaUnlocked(api, kExpectedSchemaId, probe_summary)) {
+            std::string repair_summary;
+            if (!RepairDeploymentUnlocked(api, repair_summary)) {
+                return StringifyStatus(false, "schema probe failed (" + probe_summary + "); repair failed: " +
+                    repair_summary + "; schemas=" + CollectSchemaListUnlocked(api));
+            }
+            schema_list = CollectSchemaListUnlocked(api);
+            if (!HasSchemaUnlocked(api, kExpectedSchemaId)) {
+                return StringifyStatus(false, "expected schema missing after repair; schemas=" + schema_list);
+            }
+            if (!ProbeSchemaUnlocked(api, kExpectedSchemaId, probe_summary)) {
+                return StringifyStatus(false, "schema probe failed after repair: " + probe_summary +
+                    "; schemas=" + schema_list);
+            }
         }
         g_runtime.deployed = true;
+        return StringifyStatus(true, "deploy-ready; schemas=" + schema_list);
     }
     return StringifyStatus(true, "deploy-ready");
 }
@@ -324,7 +509,10 @@ std::string CreateSession(const std::string &schema_id)
         return "";
     }
     if (!schema_id.empty()) {
-        api->select_schema(session_id, schema_id.c_str());
+        if (!api->select_schema(session_id, schema_id.c_str())) {
+            api->destroy_session(session_id);
+            return "";
+        }
     }
     return std::to_string(static_cast<unsigned long long>(session_id));
 }

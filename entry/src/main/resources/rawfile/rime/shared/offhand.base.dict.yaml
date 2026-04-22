@@ -1,12 +1,53 @@
-# Minimal dictionary used by the native stub and future real librime deploy.
+# Offhand custom phrase dictionary layered on top of luna_pinyin at schema level.
+# 词条以简体为准，权重高于 preset vocabulary，作为常用短语的保底来源。
 ---
 name: offhand.base
-version: "0.1"
+version: "0.3"
 sort: by_weight
 use_preset_vocabulary: false
 ...
-你好	ni hao	100
-输入法	shu ru fa	80
-鸿蒙	hong meng	80
-语音	yu yin	70
-润色	run se	60
+# Brand / product phrases
+西湖	xi hu	12000
+你好	ni hao	10000
+输入法	shu ru fa	9800
+鸿蒙	hong meng	9700
+语音输入	yu yin shu ru	9600
+润色	run se	9500
+# ji+jie 常用词（用户重点反馈场景）
+季节	ji jie	32000
+集结	ji jie	31800
+季节性	ji jie xing	31600
+集结号	ji jie hao	31400
+积极	ji ji	31200
+积极性	ji ji xing	31000
+机械	ji xie	30800
+机械化	ji xie hua	30600
+机械师	ji xie shi	30500
+几件	ji jian	30400
+几节	ji jie	30300
+记得	ji de	30200
+计划	ji hua	30100
+极其	ji qi	30000
+及时	ji shi	29800
+既然	ji ran	29600
+基础	ji chu	29400
+寂静	ji jing	29200
+# zh+jie 常用词（易与 ji+jie 混淆）
+直接	zhi jie	29000
+直接了当	zhi jie liao dang	28800
+# l+jie 常用词
+理解	li jie	28600
+历届	li jie	28500
+# 其它高频两字词
+你们	ni men	28400
+我们	wo men	28400
+他们	ta men	28400
+时间	shi jian	28200
+空间	kong jian	28000
+事情	shi qing	27800
+工作	gong zuo	27600
+生活	sheng huo	27400
+学习	xue xi	27200
+中国	zhong guo	27000
+北京	bei jing	26800
+上海	shang hai	26600

@@ -1,5 +1,6 @@
 import audio from '@ohos.multimedia.audio';
 import { util } from '@kit.ArkTS';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { RemoteHttpClient } from '../network/RemoteHttpClient';
 import { OffhandVoiceConfig, VoiceRecognitionResult } from '../common/ImeTypes';
 
@@ -34,15 +35,34 @@ export class VoiceCaptureService {
 
   async start(config: OffhandVoiceConfig): Promise<void> {
     if (this.state.active) {
+      hilog.warn(0xFF10, 'VoiceCaptureService', 'start called but already active');
       return;
     }
     this.resetChunks();
     let sampleRate = resolveSampleRate(config.sampleRate);
-    this.capturer = await this.createCapturerWithFallback(sampleRate);
+    hilog.info(0xFF10, 'VoiceCaptureService', 'creating AudioCapturer with sampleRate=%{public}d', config.sampleRate);
+    try {
+      this.capturer = await this.createCapturerWithFallback(sampleRate);
+    } catch (error) {
+      let errorMsg = (error as Error).message ?? String(error);
+      hilog.error(0xFF10, 'VoiceCaptureService', 'createAudioCapturer failed: %{public}s', errorMsg);
+      throw new Error(errorMsg);
+    }
     this.capturer.on('readData', this.onReadData);
-    await this.capturer.start();
+    hilog.info(0xFF10, 'VoiceCaptureService', 'starting AudioCapturer...');
+    try {
+      await this.capturer.start();
+    } catch (error) {
+      let errorMsg = (error as Error).message ?? String(error);
+      hilog.error(0xFF10, 'VoiceCaptureService', 'capturer.start failed: %{public}s', errorMsg);
+      this.capturer.off('readData', this.onReadData);
+      await this.capturer.release();
+      this.capturer = undefined;
+      throw new Error(errorMsg);
+    }
     this.state.active = true;
     this.state.startedAt = Date.now();
+    hilog.info(0xFF10, 'VoiceCaptureService', 'AudioCapturer started successfully');
   }
 
   async stop(config: OffhandVoiceConfig, locale: string): Promise<VoiceRecognitionResult> {

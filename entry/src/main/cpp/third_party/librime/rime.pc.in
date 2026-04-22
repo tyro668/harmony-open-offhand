@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: rime
+Description: Rime input method engine
+Version: @rime_version@
+Libs: -L${libdir} -lrime
+Cflags: -I${includedir}

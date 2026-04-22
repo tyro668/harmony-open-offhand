@@ -7,7 +7,7 @@
     "mode": "lower",
     "engine": "librime",
     "schemaId": "offhand_pinyin",
-    "keyboardLayout": "qwerty_26",
+    "keyboardLayout": "t9_9",
     "voiceEnabled": true,
     "llmPolishEnabled": true,
     "domainHints": [
@@ -18,8 +18,8 @@
     "extra": {
       "punctuationMode": "zh",
       "supportedKeyboardLayouts": [
-        "qwerty_26",
-        "t9_9"
+        "t9_9",
+        "qwerty_26"
       ]
     }
   },

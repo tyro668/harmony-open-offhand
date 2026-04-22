@@ -4,6 +4,30 @@ export interface NineKeyStateSnapshot {
   activeSpelling: string;
 }
 
+/*
+ * 9-key pinyin segmenter — algorithmic counterpart to
+ * fcitx5-chinese-addons' pinyin decoder (im/pinyin/pinyin.cpp) and
+ * libime::PinyinSegmenter (others/libime/src/libime/pinyin/
+ * pinyinsegmenter.{h,cpp}).
+ *
+ * Single-key-multi-letter disambiguation strategy:
+ *   - Each digit 2..9 maps to 3 or 4 letters via the ITU-T E.161 layout
+ *     (the same one fcitx5 uses for its T9 lookup tables).
+ *   - A digit sequence is treated as a DAG: each position can start a
+ *     syllable consuming 1..N digits. Edges are weighted by the rank of
+ *     the syllable in RANKED_PINYIN_SYLLABLES so that common syllables
+ *     like "yi/ji/di" out-compete rare ones that share the same digit
+ *     prefix (e.g. "yi"=94 beats "xi"=94 through rank ordering because
+ *     we cache the best result per start position).
+ *   - Top-K spellings are extracted with memoised DFS + per-position
+ *     beam pruning (MAX_SPELLINGS), which is equivalent to libime's
+ *     SegmentGraph k-shortest-path walk for small sequences.
+ *   - Partial finals (digit prefix that doesn't complete a syllable) are
+ *     admitted with PARTIAL_FINAL_COST so that mid-word candidates are
+ *     still offered while keeping them behind any completed parse.
+ */
+
+
 interface RankedPinyinSyllable {
   text: string;
   digits: string;
@@ -266,6 +290,33 @@ function spellingToDigits(spelling: string): string {
 
 function isNineKeyDigit(value: string): boolean {
   return /^[2-9]$/.test(value);
+}
+
+/**
+ * ITU-T E.161 / fcitx5 T9 digit → letter layout. Useful when the UI wants
+ * to render the "abc / def / ghi" hint above each numeric key, and for
+ * reverse lookups in tests.
+ */
+export function getLettersForDigit(digit: string): string {
+  switch (digit) {
+    case '2': return 'abc';
+    case '3': return 'def';
+    case '4': return 'ghi';
+    case '5': return 'jkl';
+    case '6': return 'mno';
+    case '7': return 'pqrs';
+    case '8': return 'tuv';
+    case '9': return 'wxyz';
+    default: return '';
+  }
+}
+
+export function isNineKeyDigitChar(value: string): boolean {
+  return isNineKeyDigit(value);
+}
+
+export function spellingToNineKeyDigits(value: string): string {
+  return spellingToDigits(normalizeSpelling(value));
 }
 
 function charToDigit(value: string): string {

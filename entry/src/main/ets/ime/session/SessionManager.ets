@@ -13,17 +13,25 @@ import { ConfigRepository } from '../config/ConfigRepository';
 import { EnglishEngine, EnglishEngineState } from '../engine/english/EnglishEngine';
 import { NineKeyStateSnapshot, PinyinNineKeyEngine } from '../engine/pinyin/PinyinNineKeyEngine';
 import { RimeService } from '../engine/rime/RimeService';
+import { HistoryBigram } from '../engine/langmodel/HistoryBigram';
+import { LanguageModelStore } from '../engine/langmodel/LanguageModelStore';
+import { PredictionService } from '../engine/langmodel/PredictionService';
 import { LlmPolishService } from '../llm/LlmPolishService';
 import { ImeTelemetry } from '../observability/ImeTelemetry';
 import { PermissionManager } from '../security/PermissionManager';
 import { VoiceCaptureService } from '../voice/VoiceCaptureService';
 import { keyboardStateStore } from './KeyboardStateStore';
 import { EditorContextAdapter } from './EditorContextAdapter';
+import { appendDirectPinyinRawInput, backspaceDirectPinyinRawInput } from './DirectPinyinInput';
 import { SecurityPolicy } from './SecurityPolicy';
+import fileIo from '@ohos.file.fs';
 
 const DOMAIN = 0xFF10;
 const TAG = 'SessionManager';
 const MAX_POLISH_BUFFER_LENGTH = 160;
+const ASSOCIATION_CONTEXT_LIMIT = 8;
+const ASSOCIATION_MAX_CANDIDATES = 6;
+const HISTORY_MAX_SENTENCES = 512;
 
 interface CommitRollbackSnapshot {
   rawInput: string;
@@ -40,6 +48,10 @@ export class SessionManager {
   private readonly rimeService: RimeService;
   private readonly englishEngine: EnglishEngine = new EnglishEngine();
   private readonly nineKeyEngine: PinyinNineKeyEngine = new PinyinNineKeyEngine();
+  private readonly historyBigram: HistoryBigram = new HistoryBigram(HISTORY_MAX_SENTENCES);
+  private readonly prediction: PredictionService = new PredictionService(this.historyBigram);
+  private languageModelStore?: LanguageModelStore;
+  private associationContext: string[] = [];
   private readonly permissionManager: PermissionManager = new PermissionManager();
   private readonly voiceCaptureService: VoiceCaptureService = new VoiceCaptureService();
   private readonly llmPolishService: LlmPolishService = new LlmPolishService();
@@ -72,8 +84,9 @@ export class SessionManager {
   async initialize(context: InputMethodExtensionContext): Promise<void> {
     this.context = context;
     await this.configRepository.initialize(context);
+    this.initializeLanguageModelStore(context);
     this.currentSubtype = this.configRepository.getDefaultSubtype();
-    this.currentKeyboardLayout = this.resolvePreferredKeyboardLayout(this.currentSubtype);
+    this.currentKeyboardLayout = this.currentSubtype.keyboardLayout;
     keyboardStateStore.setSubtypes(
       this.configRepository.listSubtypeSummaries(),
       this.currentSubtype.id,
@@ -113,13 +126,15 @@ export class SessionManager {
       await this.stopVoiceInput(true);
     }
     if (this.rimeSessionId.length > 0) {
-      try {
-        this.rimeService.clearComposition(this.rimeSessionId);
-      } catch (_) {
-      }
+      // Mirror fcitx5-chinese-addons `SwitchInputMethodBehavior::CommitPreedit`:
+      // commit any pending preedit so Rime's user_dict records the selection,
+      // then persist learning to disk via sync_user_data.
+      await this.finalizePendingRimeComposition();
       this.rimeService.destroySession(this.rimeSessionId);
       this.rimeSessionId = '';
     }
+    this.persistRimeUserDataSafely('inputStop');
+    this.persistLanguageModelSafely('inputStop');
     if (this.editorAdapter) {
       await this.editorAdapter.clearPreviewText();
     }
@@ -165,8 +180,15 @@ export class SessionManager {
   }
 
   async switchSubtype(subtypeId: string): Promise<void> {
+    // Commit and persist any in-flight Rime composition before swapping subtype,
+    // matching fcitx5-chinese-addons' CommitPreedit + saveDict behavior on IM switch.
+    if (this.rimeSessionId.length > 0) {
+      await this.finalizePendingRimeComposition();
+    }
+    this.persistRimeUserDataSafely('switchSubtype');
+    this.persistLanguageModelSafely('switchSubtype');
     this.currentSubtype = this.configRepository.resolveSubtypeById(subtypeId);
-    this.currentKeyboardLayout = this.resolvePreferredKeyboardLayout(this.currentSubtype);
+    this.currentKeyboardLayout = this.currentSubtype.keyboardLayout;
     this.englishEngine.reset();
     this.syncNineKeyState(this.nineKeyEngine.reset());
     keyboardStateStore.setSubtypes(
@@ -224,16 +246,36 @@ export class SessionManager {
   }
 
   async typeNineKeyDigit(digit: string): Promise<void> {
-    if (!this.currentSubtype || !this.editorAdapter || !this.isNineKeyLayoutActive()) {
+    hilog.info(DOMAIN, TAG,
+      'typeNineKeyDigit enter digit=%{public}s subtype=%{public}s editorAdapter=%{public}s nineKeyActive=%{public}s rimeSessionId=%{public}s',
+      digit,
+      this.currentSubtype ? this.currentSubtype.id : 'undefined',
+      this.editorAdapter ? 'present' : 'absent',
+      this.isNineKeyLayoutActive() ? 'true' : 'false',
+      this.rimeSessionId.length > 0 ? this.rimeSessionId : 'empty');
+    if (!this.currentSubtype) {
+      hilog.warn(DOMAIN, TAG, 'typeNineKeyDigit early-return: currentSubtype is undefined');
+      return;
+    }
+    if (!this.editorAdapter) {
+      hilog.warn(DOMAIN, TAG, 'typeNineKeyDigit early-return: editorAdapter is undefined (inputStart not fired)');
+      return;
+    }
+    if (!this.isNineKeyLayoutActive()) {
+      hilog.warn(DOMAIN, TAG,
+        'typeNineKeyDigit early-return: not nine-key layout; resolvedLayout=%{public}s engine=%{public}s',
+        this.getResolvedKeyboardLayout(), this.currentSubtype.engine);
       return;
     }
     this.clearRollbackState();
     this.invalidatePolishActions();
     await this.ensureRimeSessionReady();
     if (this.rimeSessionId.length === 0) {
+      hilog.error(DOMAIN, TAG, 'typeNineKeyDigit early-return: rimeSessionId empty after ensureRimeSessionReady');
       return;
     }
     await this.applyNineKeyState(this.nineKeyEngine.appendDigit(digit));
+    hilog.info(DOMAIN, TAG, 'typeNineKeyDigit done digit=%{public}s rimeSessionId=%{public}s', digit, this.rimeSessionId);
   }
 
   async selectNineKeySpelling(spelling: string): Promise<void> {
@@ -287,7 +329,12 @@ export class SessionManager {
   }
 
   async pressBackspace(): Promise<void> {
+    hilog.info(DOMAIN, TAG,
+      'pressBackspace enter editorAdapter=%{public}s subtype=%{public}s',
+      this.editorAdapter ? 'present' : 'absent',
+      this.currentSubtype ? this.currentSubtype.id : 'undefined');
     if (!this.editorAdapter || !this.currentSubtype) {
+      hilog.warn(DOMAIN, TAG, 'pressBackspace early-return: editorAdapter/currentSubtype missing');
       return;
     }
     this.invalidatePolishActions();
@@ -329,7 +376,11 @@ export class SessionManager {
   }
 
   async pressEnter(): Promise<void> {
+    hilog.info(DOMAIN, TAG,
+      'pressEnter enter editorAdapter=%{public}s',
+      this.editorAdapter ? 'present' : 'absent');
     if (!this.editorAdapter) {
+      hilog.warn(DOMAIN, TAG, 'pressEnter early-return: editorAdapter missing');
       return;
     }
     this.invalidatePolishActions();
@@ -400,30 +451,6 @@ export class SessionManager {
     await this.applyRimeState(state);
   }
 
-  async clearActiveInput(): Promise<void> {
-    this.invalidatePolishActions();
-    this.clearRollbackState();
-    this.clearVoiceDraftArtifacts();
-    if (this.isNineKeyLayoutActive()) {
-      this.syncNineKeyState(this.nineKeyEngine.reset());
-    }
-    if (this.shouldUseEnglishEngine()) {
-      this.englishEngine.reset();
-    }
-    if (this.rimeSessionId.length > 0) {
-      this.rimeService.clearComposition(this.rimeSessionId);
-    }
-    keyboardStateStore.patch({
-      preedit: '',
-      candidates: [],
-      nineKeySequence: '',
-      nineKeySpellings: [],
-      activeNineKeySpelling: '',
-      voiceTranscriptPreview: '',
-      statusText: 'Cleared active input'
-    });
-  }
-
   async startVoiceInput(): Promise<void> {
     if (!this.currentSubtype || !this.activeCapabilities?.voiceEnabled) {
       keyboardStateStore.patch({
@@ -465,10 +492,11 @@ export class SessionManager {
       });
       void ImeTelemetry.trackBehavior('voice_start', `subtypeId=${this.currentSubtype.id}`);
     } catch (error) {
-      hilog.error(DOMAIN, TAG, 'Failed to start voice capture: %{public}s', JSON.stringify(error));
+      let errorMsg = (error as Error).message ?? JSON.stringify(error);
+      hilog.error(DOMAIN, TAG, 'Failed to start voice capture: %{public}s', errorMsg);
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: 'Voice capture failed to start',
+        voiceStatusText: `Voice capture failed: ${errorMsg}`,
         statusText: 'Voice capture unavailable'
       });
     }
@@ -505,6 +533,9 @@ export class SessionManager {
 
       this.setVoiceDraftText(transcript);
 
+      // 自动插入识别结果，不再停留在草稿区等待确认
+      await this.insertVoiceDraft();
+
       let statusSource: string = result.source;
       let llmConfig = this.configRepository.getConfig().llmPolish;
       if (voiceConfig.autoPolishResult && this.activeCapabilities?.polishEnabled && llmConfig.autoPolishVoiceResult) {
@@ -521,7 +552,7 @@ export class SessionManager {
         });
         if (polishResult.text.length > 0 && polishResult.text !== transcript) {
           this.presentPolishSuggestion({
-            sourceText: voiceConfig.autoInsertResult ? transcript : '',
+            sourceText: transcript,
             suggestedText: polishResult.text,
             source: 'voice_auto',
             provider: polishResult.source
@@ -545,10 +576,11 @@ export class SessionManager {
         `durationMs=${durationMs};asrSource=${result.source};suggestionReady=${this.pendingPolishSuggestion !== undefined}`
       );
     } catch (error) {
-      hilog.error(DOMAIN, TAG, 'Failed to stop voice capture: %{public}s', JSON.stringify(error));
+      let errorMsg = (error as Error).message ?? JSON.stringify(error);
+      hilog.error(DOMAIN, TAG, 'Failed to stop voice capture: %{public}s', errorMsg);
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: 'Voice recognition failed',
+        voiceStatusText: `Voice recognition failed: ${errorMsg}`,
         statusText: 'Voice recognition failed',
         isPolishRunning: false
       });
@@ -614,7 +646,10 @@ export class SessionManager {
     if (suggestion.source === 'voice_auto') {
       this.pendingPolishSuggestion = undefined;
       this.lastAppliedPolish = suggestion;
-      this.setVoiceDraftText(suggestion.suggestedText);
+      // 替换编辑器中已插入的原文
+      if (this.editorAdapter && suggestion.sourceText.length > 0) {
+        await this.editorAdapter.replaceRecentText(suggestion.sourceText, suggestion.suggestedText);
+      }
       keyboardStateStore.patch({
         statusText: `Applied voice polish via ${suggestion.provider}`,
         showPolishSuggestion: false,
@@ -673,7 +708,10 @@ export class SessionManager {
     let rollback = this.lastAppliedPolish;
     if (rollback.source === 'voice_auto') {
       this.lastAppliedPolish = undefined;
-      this.setVoiceDraftText(rollback.sourceText);
+      // 将编辑器中润色后的文字替换回原文
+      if (this.editorAdapter && rollback.sourceText.length > 0) {
+        await this.editorAdapter.replaceRecentText(rollback.suggestedText, rollback.sourceText);
+      }
       keyboardStateStore.patch({
         statusText: 'Restored original voice draft',
         canRevertPolish: false
@@ -730,6 +768,46 @@ export class SessionManager {
     this.clearVoiceDraftArtifacts();
     keyboardStateStore.patch({
       statusText: 'Voice draft cleared'
+    });
+  }
+
+  async clearActiveInput(): Promise<void> {
+    this.invalidatePolishActions();
+    if (this.voiceCaptureService.isRecording()) {
+      await this.stopVoiceInput(true);
+      keyboardStateStore.patch({
+        statusText: 'Voice capture canceled'
+      });
+      return;
+    }
+    if (this.pendingVoiceDraftText.length > 0 ||
+      (this.pendingPolishSuggestion && this.pendingPolishSuggestion.source === 'voice_auto')) {
+      await this.clearVoiceDraft();
+      return;
+    }
+    if (this.shouldUseEnglishEngine() && this.englishEngine.hasComposition()) {
+      this.englishEngine.reset();
+      await this.clearCurrentPreview();
+      this.updateEnglishCandidateState(this.englishEngine.getState(this.shouldAutoCapitalizeEnglish()));
+      keyboardStateStore.patch({
+        statusText: 'English composition cleared'
+      });
+      return;
+    }
+    if (this.currentSubtype?.engine === 'librime' && this.rimeSessionId.length > 0) {
+      this.clearRollbackState();
+      this.rimeService.clearComposition(this.rimeSessionId);
+      let state = this.rimeService.getState(this.rimeSessionId);
+      this.syncNineKeyStateFromRawInput(state.rawInput);
+      await this.syncPreviewText(state.composingText);
+      this.updateCandidateState(state);
+      keyboardStateStore.patch({
+        statusText: 'Composition cleared'
+      });
+      return;
+    }
+    keyboardStateStore.patch({
+      statusText: 'No active composition to clear'
     });
   }
 
@@ -823,13 +901,22 @@ export class SessionManager {
     }
     try {
       let options = await this.configRepository.buildRimeInitOptions(this.context);
+      hilog.info(
+        DOMAIN,
+        TAG,
+        'ensureRimeSessionReady shared=%{public}s user=%{public}s schema=%{public}s version=%{public}s',
+        options.sharedDataDir,
+        options.userDataDir,
+        options.schemaId,
+        options.resourceVersion ?? ''
+      );
       this.rimeService.initialize(options);
       if (this.rimeSessionId.length === 0) {
         this.rimeSessionId = this.rimeService.createSession(this.currentSubtype.schemaId ?? options.schemaId);
-        this.rimeService.applyOptions(this.rimeSessionId, options.options);
       } else if (this.currentSubtype.schemaId) {
         this.rimeService.setSchema(this.rimeSessionId, this.currentSubtype.schemaId);
       }
+      this.rimeService.applyOptions(this.rimeSessionId, options.options);
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Failed to initialize Rime session: %{public}s', JSON.stringify(error));
       keyboardStateStore.patch({
@@ -839,6 +926,15 @@ export class SessionManager {
   }
 
   private async applyRimeState(state: RimeState, previousState?: RimeState): Promise<void> {
+    hilog.info(
+      DOMAIN,
+      TAG,
+      'Rime state raw=%{public}s composing=%{public}s candidates=%{public}d first=%{public}s',
+      state.rawInput,
+      state.composingText,
+      state.candidates.length,
+      state.candidates.length > 0 ? state.candidates[0].text : ''
+    );
     if (state.commitText.length > 0 && this.editorAdapter) {
       if (previousState && previousState.rawInput.length > 0) {
         this.pendingRollback = {
@@ -958,6 +1054,106 @@ export class SessionManager {
     this.pendingRollback = undefined;
   }
 
+  private async finalizePendingRimeComposition(): Promise<void> {
+    if (this.rimeSessionId.length === 0) {
+      return;
+    }
+    try {
+      let previousState = this.rimeService.getState(this.rimeSessionId);
+      if (previousState.composingText.length > 0 || previousState.rawInput.length > 0) {
+        let committedState = this.rimeService.commitComposition(this.rimeSessionId);
+        await this.applyRimeState(committedState, previousState);
+      } else {
+        this.rimeService.clearComposition(this.rimeSessionId);
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'finalizePendingRimeComposition failed: %{public}s', JSON.stringify(error));
+    }
+  }
+
+  private persistRimeUserDataSafely(reason: string): void {
+    try {
+      this.rimeService.syncUserData();
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'syncUserData(%{public}s) failed: %{public}s',
+        reason, JSON.stringify(error));
+    }
+  }
+
+  private initializeLanguageModelStore(context: InputMethodExtensionContext): void {
+    let filesDir = '';
+    try {
+      filesDir = context.filesDir;
+    } catch (_) {
+      filesDir = '';
+    }
+    if (filesDir.length === 0) {
+      return;
+    }
+    let dirPath = `${filesDir}/langmodel`;
+    try {
+      if (!fileIo.accessSync(dirPath)) {
+        fileIo.mkdirSync(dirPath, true);
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'langmodel mkdir failed: %{public}s', JSON.stringify(error));
+      return;
+    }
+    let historyPath = `${dirPath}/history.tsv`;
+    let store = new LanguageModelStore(historyPath);
+    try {
+      store.load(this.historyBigram);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'langmodel load failed: %{public}s', JSON.stringify(error));
+    }
+    this.languageModelStore = store;
+  }
+
+  private persistLanguageModelSafely(reason: string): void {
+    if (!this.languageModelStore) {
+      return;
+    }
+    try {
+      this.languageModelStore.saveIfDirty(this.historyBigram);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'langmodel save(%{public}s) failed: %{public}s',
+        reason, JSON.stringify(error));
+    }
+  }
+
+  private recordLanguageModelCommit(text: string): void {
+    let tokens = tokenizeForLanguageModel(text);
+    if (tokens.length === 0) {
+      return;
+    }
+    this.historyBigram.add(tokens);
+    // Maintain a small tail used as bigram context for association lookup.
+    for (let index = 0; index < tokens.length; index++) {
+      this.associationContext.push(tokens[index]);
+    }
+    if (this.associationContext.length > ASSOCIATION_CONTEXT_LIMIT) {
+      this.associationContext = this.associationContext.slice(
+        this.associationContext.length - ASSOCIATION_CONTEXT_LIMIT);
+    }
+  }
+
+  private refreshAssociationCandidates(): void {
+    if (this.associationContext.length === 0) {
+      return;
+    }
+    let words = this.prediction.predict(this.associationContext, ASSOCIATION_MAX_CANDIDATES);
+    keyboardStateStore.patch({
+      associations: words
+    });
+  }
+
+  private clearAssociationCandidates(): void {
+    this.associationContext = [];
+    keyboardStateStore.patch({
+      associations: []
+    });
+  }
+
   private async restoreCommittedComposition(snapshot: CommitRollbackSnapshot): Promise<void> {
     if (!this.editorAdapter || this.rimeSessionId.length === 0) {
       return;
@@ -969,7 +1165,7 @@ export class SessionManager {
     if (snapshot.schemaId.length > 0) {
       this.rimeService.setSchema(this.rimeSessionId, snapshot.schemaId);
     }
-    let restoredState = this.rimeService.setInput(this.rimeSessionId, snapshot.rawInput);
+    let restoredState = this.rimeService.syncInput(this.rimeSessionId, snapshot.rawInput);
     this.clearRollbackState();
     await this.applyRimeState(restoredState);
     keyboardStateStore.patch({
@@ -982,6 +1178,8 @@ export class SessionManager {
       return;
     }
     this.pendingPolishText = limitPolishBuffer(this.pendingPolishText + text);
+    this.recordLanguageModelCommit(text);
+    this.refreshAssociationCandidates();
     this.updatePolishAvailability();
   }
 
@@ -1008,16 +1206,16 @@ export class SessionManager {
       return;
     }
     let previousState = this.rimeService.getState(this.rimeSessionId);
-    let currentInput = previousState.rawInput.length > 0 ? previousState.rawInput : previousState.composingText;
+    let currentInput = previousState.rawInput;
     let maxCompositionLength = this.configRepository.getConfig().input.maxCompositionLength;
-    let nextInput = `${currentInput}${normalized}`;
-    if (maxCompositionLength > 0 && nextInput.length > maxCompositionLength) {
+    let nextInput = appendDirectPinyinRawInput(currentInput, normalized, maxCompositionLength);
+    if (nextInput === undefined) {
       keyboardStateStore.patch({
         statusText: 'Pinyin composition length limit reached'
       });
       return;
     }
-    let state = this.rimeService.setInput(this.rimeSessionId, nextInput);
+    let state = this.rimeService.processText(this.rimeSessionId, normalized);
     await this.applyRimeState(state, previousState);
   }
 
@@ -1027,13 +1225,13 @@ export class SessionManager {
     }
     this.clearRollbackState();
     let currentState = this.rimeService.getState(this.rimeSessionId);
-    let currentInput = currentState.rawInput.length > 0 ? currentState.rawInput : currentState.composingText;
+    let currentInput = currentState.rawInput;
     if (currentInput.length === 0) {
       return;
     }
-    let nextInput = currentInput.substring(0, currentInput.length - 1);
+    let nextInput = backspaceDirectPinyinRawInput(currentInput);
     let state = nextInput.length > 0 ?
-      this.rimeService.setInput(this.rimeSessionId, nextInput) :
+      this.rimeService.syncInput(this.rimeSessionId, nextInput) :
       this.rimeService.clearComposition(this.rimeSessionId);
     await this.applyRimeState(state, currentState);
   }
@@ -1053,7 +1251,7 @@ export class SessionManager {
       return false;
     }
     let currentState = this.rimeService.getState(this.rimeSessionId);
-    return currentState.rawInput.length > 0 || currentState.composingText.length > 0;
+    return currentState.rawInput.length > 0;
   }
 
   private async applyNineKeyState(state: NineKeyStateSnapshot): Promise<void> {
@@ -1062,7 +1260,7 @@ export class SessionManager {
       return;
     }
     let rimeState = state.activeSpelling.length > 0 ?
-      this.rimeService.setInput(this.rimeSessionId, state.activeSpelling) :
+      this.rimeService.syncInput(this.rimeSessionId, state.activeSpelling) :
       this.rimeService.clearComposition(this.rimeSessionId);
     await this.applyRimeState(rimeState);
     keyboardStateStore.patch({
@@ -1117,10 +1315,17 @@ export class SessionManager {
     if (this.currentSubtype.keyboardLayout === 'voice_panel') {
       return ['voice_panel'];
     }
+    let layouts: KeyboardLayoutId[];
     if (this.shouldUseEnglishEngine()) {
-      return ['qwerty_26'];
+      layouts = ['qwerty_26'];
+    } else {
+      layouts = this.resolveSupportedKeyboardLayouts(this.currentSubtype);
     }
-    return this.resolveSupportedKeyboardLayouts(this.currentSubtype);
+    // 如果当前子类型支持语音，将语音面板加入可选布局
+    if (this.currentSubtype.voiceEnabled && layouts.indexOf('voice_panel') < 0) {
+      layouts.push('voice_panel');
+    }
+    return layouts;
   }
 
   private resolveKeyboardLayoutOptions(): KeyboardLayoutOption[] {
@@ -1269,4 +1474,42 @@ function limitPolishBuffer(text: string): string {
     return text;
   }
   return text.substring(text.length - MAX_POLISH_BUFFER_LENGTH);
+}
+
+/**
+ * Tokenize a committed text segment into word-like units for the bigram.
+ * - CJK ideographs (U+4E00..U+9FFF and extensions) become single-char tokens.
+ * - Runs of ASCII letters/digits are combined into a single token.
+ * - Whitespace/punctuation are treated as sentence separators and dropped.
+ */
+function tokenizeForLanguageModel(text: string): string[] {
+  let tokens: string[] = [];
+  let buffer = '';
+  for (let codePoint of text) {
+    let code = codePoint.codePointAt(0);
+    if (code === undefined) {
+      continue;
+    }
+    let isAscii = (code >= 0x30 && code <= 0x39)
+      || (code >= 0x41 && code <= 0x5A)
+      || (code >= 0x61 && code <= 0x7A)
+      || code === 0x27; // apostrophe inside English words
+    let isCjk = (code >= 0x3400 && code <= 0x9FFF)
+      || (code >= 0x20000 && code <= 0x2FA1F);
+    if (isAscii) {
+      buffer += codePoint;
+      continue;
+    }
+    if (buffer.length > 0) {
+      tokens.push(buffer.toLowerCase());
+      buffer = '';
+    }
+    if (isCjk) {
+      tokens.push(codePoint);
+    }
+  }
+  if (buffer.length > 0) {
+    tokens.push(buffer.toLowerCase());
+  }
+  return tokens;
 }

@@ -1,6 +1,7 @@
 export interface RimeOptionState {
   ascii_mode: boolean;
   full_shape: boolean;
+  emoji_suggestion?: boolean;
 }
 
 export type KeyboardLayoutId = 'qwerty_26' | 't9_9' | 'voice_panel';
@@ -86,6 +87,10 @@ export interface OffhandRimeConfig {
 
 export interface OffhandPinyinConfig {
   engine: string;
+  enablePrediction: boolean;
+  enableMixedInput: boolean;
+  enableFuzzy: boolean;
+  fuzzyPairs: string[][];
   rime: OffhandRimeConfig;
 }
 
@@ -142,6 +147,7 @@ export interface RimeInitOptions {
   userDataDir: string;
   schemaId: string;
   options: RimeOptionState;
+  resourceVersion?: string;
 }
 
 export interface SessionCapabilitySnapshot {

@@ -33,6 +33,7 @@ export interface KeyboardUiState {
   polishSourceText: string;
   polishSuggestionText: string;
   canRevertPolish: boolean;
+  associations: string[];
 }
 
 type KeyboardStateListener = (state: KeyboardUiState) => void;
@@ -47,9 +48,9 @@ const DEFAULT_STATE: KeyboardUiState = {
   candidates: [],
   currentSubtypeId: '',
   currentSubtypeName: '',
-  keyboardLayout: 'qwerty_26',
+  keyboardLayout: 't9_9',
   availableKeyboardLayouts: [
-    { id: 'qwerty_26', label: '26 键' }
+    { id: 't9_9', label: '9 键' }
   ],
   availableSubtypes: [],
   nineKeySequence: '',
@@ -71,7 +72,8 @@ const DEFAULT_STATE: KeyboardUiState = {
   showPolishSuggestion: false,
   polishSourceText: '',
   polishSuggestionText: '',
-  canRevertPolish: false
+  canRevertPolish: false,
+  associations: []
 };
 
 class KeyboardStateStore {
@@ -189,6 +191,9 @@ class KeyboardStateStore {
     if (nextState.canRevertPolish !== undefined) {
       updatedState.canRevertPolish = nextState.canRevertPolish;
     }
+    if (nextState.associations !== undefined) {
+      updatedState.associations = nextState.associations.slice();
+    }
     this.state = updatedState;
     this.emit();
   }
@@ -203,6 +208,9 @@ class KeyboardStateStore {
     updatedState.hasPreviousCandidatePage = hasPreviousPage;
     updatedState.hasNextCandidatePage = hasNextPage;
     updatedState.highlightedCandidateIndex = highlightedCandidateIndex;
+    if (preedit.length > 0 || candidates.length > 0) {
+      updatedState.associations = [];
+    }
     this.state = updatedState;
     this.emit();
   }
@@ -253,6 +261,7 @@ class KeyboardStateStore {
     updatedState.polishSourceText = '';
     updatedState.polishSuggestionText = '';
     updatedState.canRevertPolish = false;
+    updatedState.associations = [];
     this.state = updatedState;
     this.emit();
   }
@@ -300,7 +309,8 @@ function cloneKeyboardUiState(source: KeyboardUiState): KeyboardUiState {
     showPolishSuggestion: source.showPolishSuggestion,
     polishSourceText: source.polishSourceText,
     polishSuggestionText: source.polishSuggestionText,
-    canRevertPolish: source.canRevertPolish
+    canRevertPolish: source.canRevertPolish,
+    associations: source.associations.slice()
   };
   return state;
 }
