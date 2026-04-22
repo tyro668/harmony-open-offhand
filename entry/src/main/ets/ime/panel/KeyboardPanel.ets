@@ -12,6 +12,11 @@ const LETTER_ROW_BOTTOM: string[] = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
 const SIDE_PUNCTUATIONS: string[] = ['，', '。', '？', '！'];
 const COMMON_SYMBOLS: string[] = ['，', '。', '？', '！', '@', '#', '/', '-', '_', ':', ';', '(', ')'];
 const TOP_ACCESSORY_HEIGHT: number = 60;
+const FEATURE_ROW_HEIGHT: number = 40;
+// iOS-style T9 keys: tighter corner radius gives a flatter, more grid-aligned
+// look than the previous 18 which made keys feel floaty and slightly
+// misaligned with neighbors.
+const T9_KEY_RADIUS: number = 10;
 
 interface NineGridKeyDescriptor {
   digit: string;
@@ -126,7 +131,7 @@ struct KeyboardPanel {
   build() {
     Stack() {
       if (!this.showSettingsTray) {
-        Column({ space: 8 }) {
+        Column({ space: 2 }) {
           this.renderTopAccessoryArea()
           this.renderVoiceDraftCard()
           this.renderPolishSuggestionStrip()
@@ -138,23 +143,18 @@ struct KeyboardPanel {
           } else {
             this.renderReferenceQwertyKeyboard();
           }
-
-          if (this.uiState.keyboardLayout !== 'voice_panel') {
-            this.renderBottomDock()
-          }
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 8, right: 8, top: 10, bottom: 0 })
+        .padding({ left: 8, right: 8, top: 4, bottom: 0 })
         .backgroundColor('#D9DCE2')
       } else {
         Column({ space: 0 }) {
           this.renderSettingsOverlay()
-          this.renderBottomDock()
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 8, right: 8, top: 10, bottom: 0 })
+        .padding({ left: 8, right: 8, top: 4, bottom: 0 })
         .backgroundColor('#D9DCE2')
         .zIndex(10)
       }
@@ -174,7 +174,7 @@ struct KeyboardPanel {
       }
     }
     .width('100%')
-    .height(TOP_ACCESSORY_HEIGHT)
+    .height(this.shouldShowCandidateStrip() ? TOP_ACCESSORY_HEIGHT : FEATURE_ROW_HEIGHT)
     .justifyContent(FlexAlign.Center)
   }
 
@@ -287,22 +287,22 @@ struct KeyboardPanel {
 
   @Builder
   private renderFeatureRow() {
+    // Top feature bar matches the reference mockup: magic/AI entry point on
+    // the far left, the T-shirt style switcher in the center, and the
+    // smile-emoji / divider / chevron cluster on the right. The mic toggle
+    // is intentionally not exposed here — voice is still reachable through
+    // the dedicated mic key in the keyboard body, which keeps the top bar
+    // uncluttered and in parity with the reference design.
     Row() {
-      this.renderFeatureIconAssetButton('tool', (): void => {
+      this.renderFeatureIconAssetButton('magic', (): void => {
         this.toggleSettingsOverlay();
       }, this.showSettingsTray)
 
-      Row({ space: 34 }) {
-        this.renderFeatureIconAssetButton('mic', (): void => {
-          this.startOrStopVoice();
-        }, this.uiState.voiceState === 'recording', this.uiState.voiceEnabled)
+      this.renderFeatureIconAssetButton('style', (): void => {
+        this.toggleReferenceLayoutStyle();
+      }, false, this.supportsNineKey() || this.supportsTwentySixKey())
 
-        this.renderFeatureIconAssetButton('style', (): void => {
-          this.toggleReferenceLayoutStyle();
-        }, false, this.supportsNineKey() || this.supportsTwentySixKey())
-      }
-
-      Row({ space: 14 }) {
+      Row({ space: 10 }) {
         this.renderFeatureIconAssetButton('smile', (): void => {
           this.showSymbolPalette = !this.showSymbolPalette;
         }, this.showSymbolPalette)
@@ -321,7 +321,7 @@ struct KeyboardPanel {
     .width('100%')
     .justifyContent(FlexAlign.SpaceBetween)
     .alignItems(VerticalAlign.Center)
-    .padding({ left: 10, right: 10, top: 2, bottom: 2 })
+    .padding({ left: 8, right: 8, top: 0, bottom: 0 })
   }
 
   @Builder
@@ -330,7 +330,7 @@ struct KeyboardPanel {
       this.renderSettingsHeader()
 
       Blank()
-        .height(14)
+        .height(8)
 
       if (this.activeSettingsTab === 'common') {
         this.renderCommonSettingsGrid()
@@ -344,28 +344,28 @@ struct KeyboardPanel {
         .layoutWeight(1)
 
       Blank()
-        .height(10)
+        .height(6)
 
       this.renderSettingsPager()
 
       Blank()
-        .height(8)
+        .height(4)
     }
     .width('100%')
     .layoutWeight(1)
-    .padding({ left: 14, right: 14, top: 8, bottom: 2 })
+    .padding({ left: 10, right: 10, top: 4, bottom: 0 })
   }
 
   @Builder
   private renderSettingsHeader() {
-    Row({ space: 10 }) {
+    Row({ space: 8 }) {
       Button() {
         this.renderSettingsIconAsset('collapse', 24, 24)
       }
-        .width(46)
-        .height(46)
+        .width(42)
+        .height(42)
         .backgroundColor('#D4D7DC')
-        .borderRadius(23)
+        .borderRadius(21)
         .shadow(this.resolveGrayKeyShadow())
         .onClick(() => {
           this.closeSettingsOverlay();
@@ -377,16 +377,16 @@ struct KeyboardPanel {
         this.renderSettingsTabButton('layout', '键盘模式')
       }
       .layoutWeight(1)
-      .height(54)
-      .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+      .height(48)
+      .padding({ left: 3, right: 3, top: 3, bottom: 3 })
       .backgroundColor('#D4D7DC')
-      .borderRadius(27)
+      .borderRadius(24)
 
       Image($r('app.media.ime_icon_settings_avatar'))
-        .width(46)
-        .height(46)
+        .width(42)
+        .height(42)
         .objectFit(ImageFit.Cover)
-        .borderRadius(23)
+        .borderRadius(21)
         .shadow(this.resolveGrayKeyShadow())
     }
     .width('100%')
@@ -399,16 +399,19 @@ struct KeyboardPanel {
       Text(label)
         .width('100%')
         .fontSize(12)
+        .minFontSize(9)
+        .maxFontSize(12)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .fontWeight(this.activeSettingsTab === tabId ? FontWeight.Bold : FontWeight.Medium)
         .fontColor(this.activeSettingsTab === tabId ? '#17181B' : '#60636A')
         .textAlign(TextAlign.Center)
         .maxLines(1)
     }
       .layoutWeight(1)
-      .height(46)
+      .height(42)
       .padding({ left: 0, right: 0, top: 0, bottom: 0 })
       .backgroundColor(this.activeSettingsTab === tabId ? '#FFFFFF' : 'rgba(0,0,0,0)')
-      .borderRadius(23)
+      .borderRadius(21)
       .shadow(this.resolveSettingsTabShadow(this.activeSettingsTab === tabId))
       .onClick(() => {
         this.activeSettingsTab = tabId;
@@ -420,7 +423,10 @@ struct KeyboardPanel {
     Column({ space: 12 }) {
       Row({ space: 12 }) {
         this.renderSettingsTile('help', '帮助和反馈', (): void => {})
-        this.renderSettingsTile('gear', '设置', (): void => {})
+        this.renderSettingsTile('gear', '设置', (): void => {
+          void imeRuntime.getSessionManager()?.openHostSettingsPage();
+          this.closeSettingsOverlay();
+        })
         this.renderSettingsTile('clipboard', '剪贴板', (): void => {})
         this.renderSettingsTile('edit', '编辑键盘', (): void => {
           this.activeSettingsTab = 'layout';
@@ -531,6 +537,9 @@ struct KeyboardPanel {
 
         Text(title)
           .fontSize(13)
+          .minFontSize(10)
+          .maxFontSize(13)
+          .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
           .fontWeight(FontWeight.Medium)
           .fontColor('#4D5058')
           .textAlign(TextAlign.Center)
@@ -565,6 +574,9 @@ struct KeyboardPanel {
 
       Text(value)
         .fontSize(12)
+        .minFontSize(9)
+        .maxFontSize(12)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .fontWeight(FontWeight.Medium)
         .fontColor('#202126')
         .textAlign(TextAlign.Center)
@@ -882,9 +894,12 @@ struct KeyboardPanel {
       Column({ space: 6 }) {
         this.renderPunctuationRail()
 
+        // Weight has no effect on horizontal size inside a vertical Column;
+        // the button fills the 70px column width via width('100%') in the
+        // builder. Keep weight=1 to document "single child takes natural row".
         this.renderBottomActionKey('符号', this.showSymbolPalette, (): void => {
           this.showSymbolPalette = !this.showSymbolPalette;
-        }, true, 1.18)
+        }, true, 1)
       }
       .width(70)
       .height(this.resolveReferenceNineKeyHeight())
@@ -905,9 +920,14 @@ struct KeyboardPanel {
         .height(this.resolveReferenceNineKeyGridHeight())
 
         Row({ space: 6 }) {
+          // Use strict 1:1:1 layout weights so the three bottom keys line up
+          // pixel-perfectly with the three grid columns above: 中/英 under
+          // column 1 (分词), 0/mic under column 2 (ABC), and 123 under column 3
+          // (DEF). Mixed non-integer weights previously drifted each key away
+          // from its grid column by a few pixels.
           this.renderBottomActionKey(this.resolveQuickSwitchLabel(), false, (): void => {
             this.switchQuickSubtype();
-          }, true, 1.16)
+          }, true, 1)
 
           this.renderVoicePadKey()
 
@@ -915,7 +935,7 @@ struct KeyboardPanel {
             if (this.supportsTwentySixKey()) {
               void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
             }
-          }, this.supportsTwentySixKey(), 1.18)
+          }, this.supportsTwentySixKey(), 1)
         }
         .width('100%')
       }
@@ -940,12 +960,18 @@ struct KeyboardPanel {
     }
     .width('100%')
     .height(this.resolveReferenceNineKeyHeight())
-    .padding({ left: 0, right: 0, top: 4, bottom: 0 })
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   @Builder
   private renderReferenceQwertyKeyboard() {
+    // All four rows use layoutWeight sums that add up to 10 with `space: 6`
+    // gaps, so every row renders with identical overall width and each
+    // letter-weight-unit is (rowInnerWidth - gapsTotal) / 10 pixels wide.
+    // That way letter keys across rows line up visually despite each row
+    // having different numbers of children.
     Column({ space: 6 }) {
+      // Row 1 — 10 letter keys (Q..P), weight 1 each; 9 gaps.
       Row({ space: 6 }) {
         ForEach(QWERTY_TOP_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
@@ -953,18 +979,24 @@ struct KeyboardPanel {
       }
       .width('100%')
 
+      // Row 2 — 9 letter keys (A..L) with half-key transparent spacers on
+      // each side, so letters sit offset from Row 1 the way iOS renders it.
+      // Blank() (empty Column) + layoutWeight(0.5) gives a pixel-scaled
+      // indent that tracks the panel width instead of a fixed pad.
       Row({ space: 6 }) {
+        Column().layoutWeight(0.5)
         ForEach(QWERTY_MIDDLE_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
         }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
+        Column().layoutWeight(0.5)
       }
       .width('100%')
-      .padding({ left: 20, right: 20 })
 
+      // Row 3 — ⇧ (weight 1.5) + 7 letters (weight 1) + ⌫ (weight 1.5) = 10.
       Row({ space: 6 }) {
         this.renderReferenceQwertySideKey('⇧', (): void => {
           this.qwertyShiftEnabled = !this.qwertyShiftEnabled;
-        }, this.qwertyShiftEnabled)
+        }, this.qwertyShiftEnabled, 1.5)
 
         ForEach(QWERTY_BOTTOM_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
@@ -972,44 +1004,48 @@ struct KeyboardPanel {
 
         this.renderReferenceQwertySideKey('⌫', (): void => {
           void imeRuntime.getSessionManager()?.pressBackspace();
-        })
+        }, false, 1.5)
       }
       .width('100%')
 
-      Row({ space: 5 }) {
+      // Row 4 — 符号(1.8) 中/英(1.1) !,(0.8) mic(2.5) ?.(0.8) 123(1.1) 完成(1.8)
+      // = 9.9 total, visually matching the reference proportion where 符号 /
+      // 完成 are the wide left/right anchors and mic is the space-bar-style
+      // central key.
+      Row({ space: 6 }) {
         this.renderReferenceQwertyBottomActionKey('符号', (): void => {
           this.showSymbolPalette = !this.showSymbolPalette;
-        }, this.showSymbolPalette, 1.16)
+        }, this.showSymbolPalette, 1.8)
 
         this.renderReferenceQwertyBottomActionKey(this.resolveQuickSwitchLabel(), (): void => {
           this.switchQuickSubtype();
-        }, false, 1.04)
+        }, false, 1.1)
 
         this.renderReferenceQwertyPunctuationKey('!', this.resolveQwertyCommaLabel(), (): void => {
           this.commitText(this.resolveQwertyCommaOutput());
-        }, 0.52)
+        }, 0.8)
 
-        this.renderReferenceQwertyVoiceKey()
+        this.renderReferenceQwertyVoiceKey(2.5)
 
         this.renderReferenceQwertyPunctuationKey('?', this.resolveQwertyPeriodLabel(), (): void => {
           this.commitText(this.resolveQwertyPeriodOutput());
-        }, 0.52)
+        }, 0.8)
 
         this.renderReferenceQwertyBottomActionKey('123', (): void => {
           if (this.supportsNineKey()) {
             void imeRuntime.getSessionManager()?.switchKeyboardLayout('t9_9');
           }
-        }, false, 0.96, this.supportsNineKey())
+        }, false, 1.1, this.supportsNineKey())
 
-        this.renderReferenceQwertyBottomActionKey('换行', (): void => {
+        this.renderReferenceQwertyBottomActionKey('完成', (): void => {
           void imeRuntime.getSessionManager()?.pressEnter();
-        }, false, 1.16)
+        }, false, 1.8)
       }
       .width('100%')
     }
     .width('100%')
     .height(this.resolveReferenceQwertyHeight())
-    .padding({ left: 0, right: 0, top: 6, bottom: 0 })
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   @Builder
@@ -1036,7 +1072,13 @@ struct KeyboardPanel {
         this.startOrStopVoice();
       })
 
-      if (this.uiState.voiceStatusText.length > 0) {
+      if (this.uiState.voiceState === 'recording' && this.uiState.voiceTranscriptPreview.length > 0) {
+        Text(this.uiState.voiceTranscriptPreview)
+          .fontSize(14)
+          .fontColor('#333333')
+          .textAlign(TextAlign.Center)
+          .maxLines(3)
+      } else if (this.uiState.voiceStatusText.length > 0) {
         Text(this.uiState.voiceStatusText)
           .fontSize(12)
           .fontColor(this.uiState.voiceState === 'error' ? '#D9534F' : '#606168')
@@ -1047,42 +1089,6 @@ struct KeyboardPanel {
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-  }
-
-  @Builder
-  private renderBottomDock() {
-    Row() {
-      this.renderBottomDockIcon('globe', (): void => {
-        this.switchQuickSubtype();
-      })
-
-      Blank()
-        .layoutWeight(1)
-
-      this.renderBottomDockIcon('magic', (): void => {
-        this.handlePrimaryToolbarAction();
-      }, this.canUsePrimaryAction())
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
-    .padding({ left: 20, right: 20, top: 8, bottom: 6 })
-  }
-
-  @Builder
-  private renderBottomDockIcon(kind: string, action: () => void, enabled: boolean = true) {
-    Column() {
-      this.renderIconAsset(kind, 30, 30, enabled ? 1 : 0.42)
-    }
-    .width(42)
-    .height(34)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
-    .opacity(enabled ? 1 : 0.55)
-    .onClick(() => {
-      if (enabled) {
-        action();
-      }
-    })
   }
 
   @Builder
@@ -1346,12 +1352,12 @@ struct KeyboardPanel {
       }, (symbol: string): string => symbol)
     }
     .justifyContent(FlexAlign.SpaceAround)
-    .width(64)
+    .width('100%')
     .height(this.resolveReferenceNineKeyGridHeight())
     .padding({ top: 12, bottom: 12 })
     .backgroundColor('#FFFFFF')
     .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveWhiteKeyShadow())
   }
 
@@ -1364,6 +1370,10 @@ struct KeyboardPanel {
 
       Text(descriptor.label)
         .fontSize(descriptor.label.length > 2 ? 19 : 22)
+        .minFontSize(13)
+        .maxFontSize(descriptor.label.length > 2 ? 19 : 22)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .maxLines(1)
         .fontWeight(FontWeight.Medium)
         .fontColor('#161616')
     }
@@ -1373,7 +1383,7 @@ struct KeyboardPanel {
     .height(this.resolveReferenceNineKeyRowHeight())
     .backgroundColor('#FFFFFF')
     .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveWhiteKeyShadow())
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
@@ -1405,7 +1415,7 @@ struct KeyboardPanel {
     .height(this.resolveReferenceNineKeyRowHeight())
     .backgroundColor('#C9CAD3')
     .border({ width: 1, color: '#CDD1D8' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveGrayKeyShadow())
     .stateStyles({ pressed: this.pressedGrayKeyStyle })
     .onClick(() => {
@@ -1424,7 +1434,7 @@ struct KeyboardPanel {
       .fontColor('#262626')
       .backgroundColor('#C9CAD3')
       .border({ width: 1, color: '#CDD1D8' })
-      .borderRadius(18)
+      .borderRadius(T9_KEY_RADIUS)
       .shadow(this.resolveGrayKeyShadow())
       .stateStyles({ pressed: this.pressedGrayKeyStyle })
       .onClick(() => {
@@ -1440,21 +1450,30 @@ struct KeyboardPanel {
     enabled: boolean = true,
     weight: number = 1
   ) {
+    // width('100%') makes the button fill its parent when used standalone
+    // inside a Column (e.g. the 符号 key in the left column). Inside a Row
+    // with multiple siblings, layoutWeight takes precedence over width on the
+    // main axis, so middle-row keys still distribute by weight.
     Button() {
       if (label === this.resolveQuickSwitchLabel()) {
         this.renderNineQuickSwitchLabel(enabled)
       } else {
         Text(label)
           .fontSize(this.resolveBottomActionFontSize(label))
+          .minFontSize(9)
+          .maxFontSize(this.resolveBottomActionFontSize(label))
+          .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+          .maxLines(1)
           .fontWeight(FontWeight.Medium)
           .fontColor(enabled ? '#202020' : '#B0B2B8')
       }
     }
+    .width('100%')
     .layoutWeight(weight)
     .height(this.resolveReferenceNineKeyBottomHeight())
     .backgroundColor(active ? '#D8E1D1' : '#C9CAD3')
     .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveGrayKeyShadow())
     .opacity(enabled ? 1 : 0.55)
     .stateStyles({ pressed: this.pressedGrayKeyStyle })
@@ -1476,11 +1495,11 @@ struct KeyboardPanel {
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-    .layoutWeight(1.72)
+    .layoutWeight(1)
     .height(this.resolveReferenceNineKeyBottomHeight())
     .backgroundColor('#FFFFFF')
     .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveWhiteKeyShadow())
     .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
@@ -1502,6 +1521,10 @@ struct KeyboardPanel {
 
       Text(descriptor.label)
         .fontSize(24)
+        .minFontSize(14)
+        .maxFontSize(24)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .maxLines(1)
         .fontWeight(FontWeight.Medium)
         .fontColor('#17181C')
     }
@@ -1511,7 +1534,7 @@ struct KeyboardPanel {
     .height(this.resolveReferenceQwertyRowHeight())
     .backgroundColor('#FFFFFF')
     .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveWhiteKeyShadow())
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
@@ -1520,7 +1543,12 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderReferenceQwertySideKey(label: string, action: () => void, active: boolean = false) {
+  private renderReferenceQwertySideKey(label: string, action: () => void, active: boolean = false,
+    weight: number = 1.5) {
+    // Row 3 side keys (⇧ / ⌫) must use layoutWeight so that their width scales
+    // with the keyboard container. The reference iOS style keeps them ~1.5×
+    // the letter key width; a fixed pixel width would drift away from the
+    // letter grid whenever the panel is wider/narrower than the design spec.
     Button() {
       if (label === '⌫') {
         this.renderIconAsset('backspace', 34, 28)
@@ -1528,11 +1556,11 @@ struct KeyboardPanel {
         this.renderIconAsset('shift', 34, 28)
       }
     }
-    .width(58)
+    .layoutWeight(weight)
     .height(this.resolveReferenceQwertyRowHeight())
     .backgroundColor(active ? '#D9E3D0' : '#C9CAD3')
     .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveGrayKeyShadow())
     .stateStyles({ pressed: this.pressedGrayKeyStyle })
     .onClick(() => {
@@ -1555,7 +1583,7 @@ struct KeyboardPanel {
     .height(this.resolveReferenceQwertyBottomHeight())
     .backgroundColor(active ? '#D9E3D0' : '#C9CAD3')
     .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveGrayKeyShadow())
     .opacity(enabled ? 1 : 0.52)
     .stateStyles({ pressed: this.pressedGrayKeyStyle })
@@ -1585,6 +1613,9 @@ struct KeyboardPanel {
     } else {
       Text(label)
         .fontSize(fontSize)
+        .minFontSize(9)
+        .maxFontSize(fontSize)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .fontWeight(FontWeight.Medium)
         .fontColor(enabled ? '#232429' : '#B5B7BE')
         .maxLines(1)
@@ -1622,6 +1653,10 @@ struct KeyboardPanel {
 
       Text(label)
         .fontSize(20)
+        .minFontSize(12)
+        .maxFontSize(20)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .maxLines(1)
         .fontWeight(FontWeight.Medium)
         .fontColor('#16171B')
     }
@@ -1631,7 +1666,7 @@ struct KeyboardPanel {
     .height(this.resolveReferenceQwertyBottomHeight())
     .backgroundColor('#FFFFFF')
     .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveWhiteKeyShadow())
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
@@ -1640,17 +1675,21 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderReferenceQwertyVoiceKey() {
+  private renderReferenceQwertyVoiceKey(weight: number = 2.5) {
+    // The mic key doubles as the space-bar in the 26-key layout so it should
+    // span roughly 2.5× a letter key width, matching the wide central key in
+    // the reference mockup. Weight is parameterised so callers can adjust per
+    // layout variant.
     Column() {
       this.renderIconAsset('voicepad', 84, 36)
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-    .layoutWeight(1.28)
+    .layoutWeight(weight)
     .height(this.resolveReferenceQwertyBottomHeight())
     .backgroundColor('#FFFFFF')
     .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(18)
+    .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveWhiteKeyShadow())
     .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
@@ -1714,7 +1753,7 @@ struct KeyboardPanel {
   }
 
   private resolveFeatureButtonWidth(kind: string): number {
-    if (kind === 'tool') {
+    if (kind === 'tool' || kind === 'magic') {
       return 40;
     }
     if (kind === 'chevron') {
@@ -1724,7 +1763,7 @@ struct KeyboardPanel {
   }
 
   private resolveFeatureIconWidth(kind: string): number {
-    if (kind === 'tool') {
+    if (kind === 'tool' || kind === 'magic') {
       return 30;
     }
     if (kind === 'chevron') {
@@ -1762,7 +1801,7 @@ struct KeyboardPanel {
     if (label === '中/英') {
       return 10;
     }
-    if (label === '换行' || label === '符号') {
+    if (label === '完成' || label === '符号') {
       return 13;
     }
     if (label === '123') {

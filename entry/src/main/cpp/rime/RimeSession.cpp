@@ -444,6 +444,19 @@ std::string DeployIfNeeded()
         return StringifyStatus(false, "bridge not initialized");
     }
     if (!g_runtime.deployed) {
+        std::string schema_list = CollectSchemaListUnlocked(api);
+        std::string cached_probe_summary;
+        // Cold-starting the IME process used to force a full deploy() every
+        // time, even when the previous launch had already produced a healthy
+        // on-disk deployment. Probing the expected schema first lets us reuse
+        // those cached build artifacts and keeps keyboard startup responsive.
+        if (HasSchemaUnlocked(api, kExpectedSchemaId) &&
+            ProbeSchemaUnlocked(api, kExpectedSchemaId, cached_probe_summary)) {
+            g_runtime.deployed = true;
+            return StringifyStatus(true,
+                "deploy-ready(cached); schemas=" + schema_list + "; probe=" + cached_probe_summary);
+        }
+
         bool deployed = false;
         std::string failure_reason;
         if (RIME_API_AVAILABLE(api, deploy)) {
@@ -468,7 +481,7 @@ std::string DeployIfNeeded()
                 failure_reason = "deploy_schema(offhand_pinyin.schema.yaml) returned false";
             }
         }
-        std::string schema_list = CollectSchemaListUnlocked(api);
+        schema_list = CollectSchemaListUnlocked(api);
         if (!deployed) {
             return StringifyStatus(false, failure_reason + "; schemas=" + schema_list);
         }

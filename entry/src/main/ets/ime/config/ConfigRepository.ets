@@ -31,6 +31,7 @@ const RIME_SHARED_RAWFILE_ROOT = 'rime/shared';
 // (2) drops the broken `simplifier` filter from the schema; (3) expands
 // offhand.base.dict.yaml with high-weight common phrases (季节/集结/...).
 const RIME_RESOURCE_VERSION = '20260422-simp-vocab-v5';
+const RIME_PREPARED_SIGNATURE_FILE = '.offhand_rime_signature';
 const RIME_SHARED_FILES: string[] = [
   'default.yaml',
   'pinyin.yaml',
@@ -137,6 +138,10 @@ export class ConfigRepository {
     let userDataDir = resolveAppPrivatePath(rime.userDataDir, context.filesDir, 'rime/user');
     ensureDirectory(userDataDir);
     let signature = `${sharedDataDir}|${userDataDir}|${buildRimeResourceSignature(this.config)}`;
+    let preparedSignaturePath = `${userDataDir}/${RIME_PREPARED_SIGNATURE_FILE}`;
+    let preparedSignature = this.lastPreparedSignature.length > 0 ?
+      this.lastPreparedSignature :
+      readTextFileIfExists(preparedSignaturePath).trim();
     // Only copy the shared data and wipe prebuilt/staging when the resource
     // signature actually changed. Re-running these steps on every re-focus
     // erased the `.table.bin`/`.prism.bin` produced by a previous deploy —
@@ -144,13 +149,14 @@ export class ConfigRepository {
     // but the next cold start would be left with an empty `build/` directory
     // and a flag cache indicating "already deployed", so phrase candidates
     // (e.g. 季节/集结 for `jijie`) silently disappeared.
-    if (this.lastPreparedSignature !== signature) {
+    if (preparedSignature !== signature || !hasRequiredRimeSharedFiles(sharedDataDir)) {
       await this.prepareRimeSharedData(context, sharedDataDir);
       resetDirectoryContents(`${sharedDataDir}/build`);
       resetDirectoryContents(`${userDataDir}/build`);
       removeRecursively(`${userDataDir}/installation.yaml`);
-      this.lastPreparedSignature = signature;
+      writeTextFile(preparedSignaturePath, signature);
     }
+    this.lastPreparedSignature = signature;
     let options: RimeOptionState = cloneOptionState(rime.options);
     let initOptions: RimeInitOptions = {
       sharedDataDir: sharedDataDir,
@@ -507,6 +513,35 @@ function writeTextFile(path: string, content: string): void {
     fileIo.writeSync(file.fd, content);
   } finally {
     fileIo.closeSync(file);
+  }
+}
+
+function readTextFileIfExists(path: string): string {
+  try {
+    if (!fileIo.accessSync(path)) {
+      return '';
+    }
+  } catch (_) {
+    return '';
+  }
+  try {
+    return fileIo.readTextSync(path);
+  } catch (_) {
+    return '';
+  }
+}
+
+function hasRequiredRimeSharedFiles(sharedDataDir: string): boolean {
+  return fileExists(`${sharedDataDir}/offhand_pinyin.schema.yaml`) &&
+    fileExists(`${sharedDataDir}/offhand.base.dict.yaml`) &&
+    fileExists(`${sharedDataDir}/offhand_pinyin.custom.yaml`);
+}
+
+function fileExists(path: string): boolean {
+  try {
+    return fileIo.accessSync(path);
+  } catch (_) {
+    return false;
   }
 }
 

@@ -32,6 +32,7 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   private keyboardPanel?: inputMethodEngine.Panel;
   private bootstrapPromise?: Promise<void>;
   private displayChangeRegistered: boolean = false;
+  private eventsRegistered: boolean = false;
 
   private readonly onInputStart = (keyboardController: inputMethodEngine.KeyboardController,
     inputClient: inputMethodEngine.InputClient): void => {
@@ -82,6 +83,7 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
     hilog.info(DOMAIN, TAG, 'Input method extension created: %{public}s', JSON.stringify(want));
     this.inputMethodAbility = inputMethodEngine.getInputMethodAbility();
     imeRuntime.setSessionManager(this.sessionManager);
+    this.registerEvents();
     this.bootstrapPromise = this.bootstrap();
   }
 
@@ -95,7 +97,6 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   private async bootstrap(): Promise<void> {
     await this.sessionManager.initialize(this.context);
     await this.ensureKeyboardPanel();
-    this.registerEvents();
     try {
       await this.sessionManager.handleSecurityModeChange(this.requireInputMethodAbility().getSecurityMode());
     } catch (error) {
@@ -220,6 +221,9 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   };
 
   private registerEvents(): void {
+    if (this.eventsRegistered) {
+      return;
+    }
     let inputMethodAbility = this.requireInputMethodAbility();
     hilog.info(DOMAIN, TAG, 'Registering input method events');
     inputMethodAbility.on('inputStart', this.onInputStart);
@@ -228,10 +232,11 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
     inputMethodAbility.on('keyboardHide', this.onKeyboardHide);
     inputMethodAbility.on('setSubtype', this.onSubtypeChange);
     inputMethodAbility.on('securityModeChange', this.onSecurityModeChange);
+    this.eventsRegistered = true;
   }
 
   private unregisterEvents(): void {
-    if (!this.inputMethodAbility) {
+    if (!this.inputMethodAbility || !this.eventsRegistered) {
       return;
     }
     this.inputMethodAbility.off('inputStart', this.onInputStart);
@@ -240,6 +245,7 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
     this.inputMethodAbility.off('keyboardHide', this.onKeyboardHide);
     this.inputMethodAbility.off('setSubtype', this.onSubtypeChange);
     this.inputMethodAbility.off('securityModeChange', this.onSecurityModeChange);
+    this.eventsRegistered = false;
   }
 
   private async awaitBootstrap(): Promise<void> {

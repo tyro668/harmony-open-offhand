@@ -173,7 +173,7 @@ export interface InputSessionContext {
 
 export interface VoiceRecognitionResult {
   text: string;
-  source: 'remote_asr' | 'mock';
+  source: 'remote_asr' | 'builtin_asr' | 'mock';
 }
 
 export interface PolishSuggestion {

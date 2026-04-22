@@ -1,6 +1,20 @@
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "/Users/richie/.ohos/config/default_harmony-open-offhand_Zc1kjvXuuAlvk04RQj5nH2_i1b7B_1U3VhWTp3rP18E=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B432AE6F56C3815AAB9C815E62A6ECA755C6C77169B9381465559A37642D782AFD4D9F687D3EAF2",
+          "profile": "/Users/richie/.ohos/config/default_harmony-open-offhand_Zc1kjvXuuAlvk04RQj5nH2_i1b7B_1U3VhWTp3rP18E=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "/Users/richie/.ohos/config/default_harmony-open-offhand_Zc1kjvXuuAlvk04RQj5nH2_i1b7B_1U3VhWTp3rP18E=.p12",
+          "storePassword": "0000001BD3F3CA34CB13CC0A14649D22A74BB1A935291F1A341AFA230085F58C6BE0F0254421B2A6A9BC41"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",

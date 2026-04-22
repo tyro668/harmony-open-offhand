@@ -72,6 +72,7 @@ export class SessionManager {
   private pendingPolishSuggestion?: PolishSuggestion;
   private lastAppliedPolish?: PolishSuggestion;
   private voiceAutoStopHandle?: VoiceAutoStopHandle;
+  private pendingVoiceStartRequested: boolean = false;
 
   constructor(
     configRepository: ConfigRepository,
@@ -122,6 +123,7 @@ export class SessionManager {
 
   async handleInputStop(): Promise<void> {
     this.clearVoiceAutoStopTimer();
+    this.pendingVoiceStartRequested = false;
     if (this.voiceCaptureService.isRecording()) {
       await this.stopVoiceInput(true);
     }
@@ -166,6 +168,25 @@ export class SessionManager {
     keyboardStateStore.patch({
       statusText: 'Keyboard panel hidden'
     });
+  }
+
+  // Launches the companion EntryAbility so users can open the full settings
+  // page from the in-keyboard "设置" tile. The IME extension cannot host a
+  // full-screen settings UI itself, and on real devices tapping the gear tile
+  // was previously a no-op which looked broken.
+  async openHostSettingsPage(): Promise<void> {
+    if (!this.context) {
+      hilog.warn(DOMAIN, TAG, 'openHostSettingsPage: no extension context');
+      return;
+    }
+    try {
+      await this.context.startAbility({
+        bundleName: 'com.opensource.harmony.offhand',
+        abilityName: 'EntryAbility'
+      });
+    } catch (err) {
+      hilog.error(DOMAIN, TAG, 'openHostSettingsPage failed: %{public}s', JSON.stringify(err));
+    }
   }
 
   async handleSubtypeChange(subtype: InputMethodSubtype): Promise<void> {
@@ -452,11 +473,52 @@ export class SessionManager {
   }
 
   async startVoiceInput(): Promise<void> {
-    if (!this.currentSubtype || !this.activeCapabilities?.voiceEnabled) {
+    if (!this.currentSubtype) {
+      this.pendingVoiceStartRequested = false;
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: 'Voice input unavailable in sensitive field',
-        statusText: 'Voice disabled by field policy'
+        voiceStatusText: 'Voice input unavailable: no active subtype',
+        statusText: 'Voice disabled: no subtype'
+      });
+      return;
+    }
+    if (!this.activeCapabilities) {
+      if (!this.editorAdapter && this.inputClient) {
+        this.editorAdapter = new EditorContextAdapter(this.inputClient);
+      }
+      if (this.editorAdapter) {
+        keyboardStateStore.patch({
+          voiceState: 'idle',
+          voiceStatusText: 'Preparing voice session...',
+          statusText: 'Refreshing session for voice input'
+        });
+        await this.refreshSessionContext('voiceStart');
+      }
+    }
+    if (!this.activeCapabilities) {
+      this.pendingVoiceStartRequested = true;
+      keyboardStateStore.patch({
+        voiceState: 'idle',
+        voiceStatusText: this.inputClient ?
+          'Waiting for session refresh to complete...' :
+          'Waiting for active input session...',
+        statusText: this.inputClient ?
+          'Voice start queued until session refresh completes' :
+          'Voice start queued until inputStart arrives'
+      });
+      return;
+    }
+    this.pendingVoiceStartRequested = false;
+    if (!this.activeCapabilities.voiceEnabled) {
+      let reason = this.activeCapabilities.isSensitiveField ?
+        'sensitive field (password/secure input)' :
+        this.activeCapabilities.restrictedReason.length > 0 ?
+          this.activeCapabilities.restrictedReason :
+          'voice disabled by policy or settings';
+      keyboardStateStore.patch({
+        voiceState: 'error',
+        voiceStatusText: `Voice input unavailable: ${reason}`,
+        statusText: `Voice disabled: ${reason}`
       });
       return;
     }
@@ -483,11 +545,18 @@ export class SessionManager {
       return;
     }
     try {
-      await this.voiceCaptureService.start(voiceConfig);
+      // 设置实时转写回调，录音过程中实时显示识别文字
+      this.voiceCaptureService.setTranscriptListener((text: string): void => {
+        keyboardStateStore.patch({
+          voiceTranscriptPreview: text,
+          voiceStatusText: text.length > 0 ? text : 'Listening...'
+        });
+      });
+      await this.voiceCaptureService.start(voiceConfig, this.currentSubtype.locale);
       this.startVoiceAutoStopTimer(voiceConfig.maxRecordSeconds);
       keyboardStateStore.patch({
         voiceState: 'recording',
-        voiceStatusText: `Listening... auto stop in ${voiceConfig.maxRecordSeconds}s`,
+        voiceStatusText: 'Listening...',
         statusText: 'Voice capture started'
       });
       void ImeTelemetry.trackBehavior('voice_start', `subtypeId=${this.currentSubtype.id}`);
@@ -813,6 +882,9 @@ export class SessionManager {
 
   dispose(): void {
     this.clearVoiceAutoStopTimer();
+    if (this.voiceCaptureService.isRecording()) {
+      void this.stopVoiceInput(true);
+    }
     if (this.rimeSessionId.length > 0) {
       this.rimeService.destroySession(this.rimeSessionId);
       this.rimeSessionId = '';
@@ -893,6 +965,17 @@ export class SessionManager {
       this.syncNineKeyState(this.nineKeyEngine.reset());
       await this.clearCurrentPreview();
     }
+
+    await this.triggerPendingVoiceStartIfNeeded(reason);
+  }
+
+  private async triggerPendingVoiceStartIfNeeded(reason: string): Promise<void> {
+    if (!this.pendingVoiceStartRequested || this.voiceCaptureService.isRecording()) {
+      return;
+    }
+    this.pendingVoiceStartRequested = false;
+    hilog.info(DOMAIN, TAG, 'Starting queued voice input after session refresh via %{public}s', reason);
+    await this.startVoiceInput();
   }
 
   private async ensureRimeSessionReady(): Promise<void> {
@@ -1374,6 +1457,7 @@ export class SessionManager {
 
   private resetVoiceState(): void {
     this.pendingVoiceDraftText = '';
+    this.voiceCaptureService.setTranscriptListener(undefined);
     keyboardStateStore.patch({
       voiceState: 'idle',
       voiceStatusText: 'Voice idle',
