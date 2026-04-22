@@ -106,8 +106,37 @@ export interface OffhandVoiceConfig {
   mockTranscript: string;
 }
 
+export type LlmProtocolId = 'openai-compatible' | 'anthropic-compatible';
+
+export interface BuiltinModelPreset {
+  presetId: string;
+  displayName: string;
+  apiModel: string;
+  protocol: LlmProtocolId;
+  endpoint: string;
+  enabled: boolean;
+}
+
+export interface BuiltinModelProvider {
+  providerId: string;
+  providerName: string;
+  models: BuiltinModelPreset[];
+}
+
+export interface BuiltinModelCatalog {
+  version: number;
+  protocols: LlmProtocolId[];
+  providers: BuiltinModelProvider[];
+}
+
 export interface OffhandLlmPolishConfig {
   enabled: boolean;
+  providerId: string;
+  providerName: string;
+  modelPresetId: string;
+  modelDisplayName: string;
+  apiModel: string;
+  protocol: LlmProtocolId;
   endpoint: string;
   apiKey?: string;
   requestTimeoutMs: number;
@@ -138,8 +167,11 @@ export interface OffhandRuntimeSettings {
   autoInsertVoiceResult: boolean;
   autoPolishVoiceResult: boolean;
   asrEndpoint: string;
-  llmEndpoint: string;
+  llmProviderId: string;
+  llmPresetId: string;
+  llmApiKey: string;
   llmStyle: string;
+  defaultEntryMode: string;
 }
 
 export interface RimeInitOptions {

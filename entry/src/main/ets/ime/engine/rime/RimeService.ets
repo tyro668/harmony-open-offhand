@@ -17,6 +17,7 @@ interface NativeRimeBridgeModule {
   deployIfNeeded(): string;
   createSession(schemaId: string): string;
   destroySession(sessionId: string): void;
+  findSession(sessionId: string): boolean;
   processKey(sessionId: string, keyCode: number, modifier: number): string;
   getState(sessionId: string): string;
   selectCandidate(sessionId: string, index: number): string;
@@ -62,6 +63,17 @@ export class RimeService {
       return;
     }
     bridge.destroySession(sessionId);
+  }
+
+  findSession(sessionId: string): boolean {
+    if (sessionId.length === 0) {
+      return false;
+    }
+    try {
+      return bridge.findSession(sessionId) === true;
+    } catch (_) {
+      return false;
+    }
   }
 
   processText(sessionId: string, text: string): RimeState {

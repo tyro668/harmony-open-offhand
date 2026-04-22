@@ -172,13 +172,14 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
       // bottom strip; otherwise the focused editor is not lifted properly.
       let width = landscape ? longSide : shortSide;
       let baseHeight = landscape ? shortSide : longSide;
-      // Portrait keyboards occupy ~38% of the long side, landscape keyboards
-      // ~48% of the short side, mirroring standard mobile IME proportions so
-      // the editor cursor stays comfortably above the keyboard.
-      let ratio = landscape ? 0.48 : 0.38;
+      // Portrait keyboards occupy ~30% of the long side, landscape keyboards
+      // ~40% of the short side. Tuned to match the actual rendered keyboard
+      // content so the panel bottom aligns with the screen bottom without
+      // leaving an empty gap below the keys.
+      let ratio = landscape ? 0.40 : 0.30;
       let estimatedHeight = Math.round(baseHeight * ratio);
-      let minHeight = Math.round(shortSide * 0.32);
-      let maxHeight = Math.round(longSide * 0.5);
+      let minHeight = Math.round(shortSide * 0.26);
+      let maxHeight = Math.round(longSide * 0.42);
       let height = Math.max(minHeight, Math.min(estimatedHeight, maxHeight));
       return new KeyboardPanelSize(width, height);
     } catch (_) {

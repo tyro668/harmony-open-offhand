@@ -86,6 +86,22 @@ napi_value DestroySession(napi_env env, napi_callback_info info)
     return result;
 }
 
+napi_value FindSession(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1] = {nullptr};
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string session_id;
+    if (argc < 1 || !ReadStringArg(env, args[0], session_id)) {
+        napi_throw_type_error(env, nullptr, "findSession expects sessionId");
+        return nullptr;
+    }
+    bool exists = offhand::rime::FindSession(session_id);
+    napi_value result = nullptr;
+    napi_get_boolean(env, exists, &result);
+    return result;
+}
+
 napi_value ProcessKey(napi_env env, napi_callback_info info)
 {
     size_t argc = 3;
@@ -240,6 +256,7 @@ static napi_value Init(napi_env env, napi_value exports)
         { "deployIfNeeded", nullptr, DeployIfNeeded, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "createSession", nullptr, CreateSession, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "destroySession", nullptr, DestroySession, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "findSession", nullptr, FindSession, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "processKey", nullptr, ProcessKey, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "getState", nullptr, GetState, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "selectCandidate", nullptr, SelectCandidate, nullptr, nullptr, nullptr, napi_default, nullptr },

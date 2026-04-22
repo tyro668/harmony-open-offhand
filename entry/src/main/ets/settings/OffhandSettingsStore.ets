@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { OffhandRuntimeSettings } from '../ime/common/ImeTypes';
+import { getDefaultBuiltinModelSelection, resolveBuiltinModelSelection } from '../ime/config/BuiltinModels';
 
 const PREF_NAME = 'offhand_runtime_settings';
 const SETTINGS_KEY = 'runtime_settings_json';
@@ -34,6 +35,7 @@ export class OffhandSettingsStore {
 }
 
 export function createDefaultRuntimeSettings(): OffhandRuntimeSettings {
+  let defaultSelection = getDefaultBuiltinModelSelection();
   return {
     enablePreviewText: true,
     enableVoice: true,
@@ -42,12 +44,16 @@ export function createDefaultRuntimeSettings(): OffhandRuntimeSettings {
     autoInsertVoiceResult: false,
     autoPolishVoiceResult: true,
     asrEndpoint: '',
-    llmEndpoint: '',
-    llmStyle: 'clean_conversational'
+    llmProviderId: defaultSelection.provider.providerId,
+    llmPresetId: defaultSelection.preset.presetId,
+    llmApiKey: '',
+    llmStyle: 'clean_conversational',
+    defaultEntryMode: 'keyboard'
   };
 }
 
 export function cloneRuntimeSettings(source: OffhandRuntimeSettings): OffhandRuntimeSettings {
+  let selection = resolveBuiltinModelSelection(source.llmProviderId, source.llmPresetId);
   return {
     enablePreviewText: source.enablePreviewText,
     enableVoice: source.enableVoice,
@@ -56,15 +62,23 @@ export function cloneRuntimeSettings(source: OffhandRuntimeSettings): OffhandRun
     autoInsertVoiceResult: source.autoInsertVoiceResult,
     autoPolishVoiceResult: source.autoPolishVoiceResult,
     asrEndpoint: source.asrEndpoint,
-    llmEndpoint: source.llmEndpoint,
-    llmStyle: source.llmStyle
+    llmProviderId: selection.provider.providerId,
+    llmPresetId: selection.preset.presetId,
+    llmApiKey: typeof source.llmApiKey === 'string' ? source.llmApiKey.trim() : '',
+    llmStyle: source.llmStyle,
+    defaultEntryMode: normalizeEntryMode(source.defaultEntryMode)
   };
+}
+
+function normalizeEntryMode(raw: string | undefined): string {
+  return raw === 'voice' ? 'voice' : 'keyboard';
 }
 
 function normalizeRuntimeSettings(raw: string): OffhandRuntimeSettings {
   try {
     let parsed = JSON.parse(raw) as OffhandRuntimeSettings;
     let defaults = createDefaultRuntimeSettings();
+    let selection = resolveBuiltinModelSelection(parsed.llmProviderId, parsed.llmPresetId);
     return {
       enablePreviewText: parsed.enablePreviewText !== undefined ? parsed.enablePreviewText : defaults.enablePreviewText,
       enableVoice: parsed.enableVoice !== undefined ? parsed.enableVoice : defaults.enableVoice,
@@ -76,9 +90,12 @@ function normalizeRuntimeSettings(raw: string): OffhandRuntimeSettings {
       autoPolishVoiceResult: parsed.autoPolishVoiceResult !== undefined ?
         parsed.autoPolishVoiceResult : defaults.autoPolishVoiceResult,
       asrEndpoint: typeof parsed.asrEndpoint === 'string' ? parsed.asrEndpoint.trim() : defaults.asrEndpoint,
-      llmEndpoint: typeof parsed.llmEndpoint === 'string' ? parsed.llmEndpoint.trim() : defaults.llmEndpoint,
+      llmProviderId: selection.provider.providerId,
+      llmPresetId: selection.preset.presetId,
+      llmApiKey: typeof parsed.llmApiKey === 'string' ? parsed.llmApiKey.trim() : defaults.llmApiKey,
       llmStyle: typeof parsed.llmStyle === 'string' && parsed.llmStyle.trim().length > 0 ?
-        parsed.llmStyle.trim() : defaults.llmStyle
+        parsed.llmStyle.trim() : defaults.llmStyle,
+      defaultEntryMode: normalizeEntryMode(parsed.defaultEntryMode)
     };
   } catch (_) {
     return createDefaultRuntimeSettings();

@@ -11,8 +11,11 @@ const LETTER_ROW_MIDDLE: string[] = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'
 const LETTER_ROW_BOTTOM: string[] = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
 const SIDE_PUNCTUATIONS: string[] = ['，', '。', '？', '！'];
 const COMMON_SYMBOLS: string[] = ['，', '。', '？', '！', '@', '#', '/', '-', '_', ':', ';', '(', ')'];
-const TOP_ACCESSORY_HEIGHT: number = 60;
+// Candidate strip and feature row must share the same height so the
+// keyboard body does not shift vertically when candidates show up. The
+// strip overlays the toolbar position 1:1.
 const FEATURE_ROW_HEIGHT: number = 40;
+const TOP_ACCESSORY_HEIGHT: number = FEATURE_ROW_HEIGHT;
 // iOS-style T9 keys: tighter corner radius gives a flatter, more grid-aligned
 // look than the previous 18 which made keys feel floaty and slightly
 // misaligned with neighbors.
@@ -92,6 +95,11 @@ struct KeyboardPanel {
   @State private activeSettingsTab: string = 'common';
   @State private showSymbolPalette: boolean = false;
   @State private qwertyShiftEnabled: boolean = false;
+  // Pulse ring state for the voice waiting circle. `voicePulseExpanded`
+  // toggles every PULSE_INTERVAL_MS so the outer rings animate out/in
+  // continuously while we are waiting for the user to keep speaking.
+  @State private voicePulseExpanded: boolean = false;
+  private voicePulseTimer?: number;
   private unsubscribe?: () => void;
 
   // @Styles methods can only include universal attributes and are state-less;
@@ -118,7 +126,9 @@ struct KeyboardPanel {
       if (state.keyboardLayout !== 'qwerty_26') {
         this.qwertyShiftEnabled = false;
       }
+      this.syncVoicePulseAnimation(state);
     });
+    this.syncVoicePulseAnimation(this.uiState);
   }
 
   aboutToDisappear(): void {
@@ -126,6 +136,38 @@ struct KeyboardPanel {
       this.unsubscribe();
       this.unsubscribe = undefined;
     }
+    this.stopVoicePulseAnimation();
+  }
+
+  private syncVoicePulseAnimation(state: KeyboardUiState): void {
+    let shouldPulse = state.keyboardLayout === 'voice_panel'
+      && state.voiceState === 'recording'
+      && state.voiceEnabled;
+    if (shouldPulse) {
+      this.startVoicePulseAnimation();
+    } else {
+      this.stopVoicePulseAnimation();
+    }
+  }
+
+  private startVoicePulseAnimation(): void {
+    if (this.voicePulseTimer !== undefined) {
+      return;
+    }
+    // Kick off the first expansion immediately so users see motion without
+    // the initial 1400ms dead zone of a timer-driven toggle.
+    this.voicePulseExpanded = true;
+    this.voicePulseTimer = setInterval((): void => {
+      this.voicePulseExpanded = !this.voicePulseExpanded;
+    }, 1400);
+  }
+
+  private stopVoicePulseAnimation(): void {
+    if (this.voicePulseTimer !== undefined) {
+      clearInterval(this.voicePulseTimer);
+      this.voicePulseTimer = undefined;
+    }
+    this.voicePulseExpanded = false;
   }
 
   build() {
@@ -174,7 +216,7 @@ struct KeyboardPanel {
       }
     }
     .width('100%')
-    .height(this.shouldShowCandidateStrip() ? TOP_ACCESSORY_HEIGHT : FEATURE_ROW_HEIGHT)
+    .height(FEATURE_ROW_HEIGHT)
     .justifyContent(FlexAlign.Center)
   }
 
@@ -332,12 +374,10 @@ struct KeyboardPanel {
       Blank()
         .height(8)
 
-      if (this.activeSettingsTab === 'common') {
-        this.renderCommonSettingsGrid()
-      } else if (this.activeSettingsTab === 'input') {
+      if (this.activeSettingsTab === 'input') {
         this.renderInputSettingsGrid()
       } else {
-        this.renderLayoutSettingsGrid()
+        this.renderCommonSettingsGrid()
       }
 
       Blank()
@@ -374,7 +414,6 @@ struct KeyboardPanel {
       Row({ space: 4 }) {
         this.renderSettingsTabButton('common', '常用功能')
         this.renderSettingsTabButton('input', '输入方式')
-        this.renderSettingsTabButton('layout', '键盘模式')
       }
       .layoutWeight(1)
       .height(48)
@@ -422,25 +461,11 @@ struct KeyboardPanel {
   private renderCommonSettingsGrid() {
     Column({ space: 12 }) {
       Row({ space: 12 }) {
-        this.renderSettingsTile('help', '帮助和反馈', (): void => {})
         this.renderSettingsTile('gear', '设置', (): void => {
           void imeRuntime.getSessionManager()?.openHostSettingsPage();
           this.closeSettingsOverlay();
         })
-        this.renderSettingsTile('clipboard', '剪贴板', (): void => {})
-        this.renderSettingsTile('edit', '编辑键盘', (): void => {
-          this.activeSettingsTab = 'layout';
-        })
-      }
-      .width('100%')
-
-      Row({ space: 12 }) {
-        this.renderSettingsTile('lexicon', '词库', (): void => {
-          this.activeSettingsTab = 'input';
-        })
-        this.renderSettingsTile('font', '字体大小', (): void => {})
-        this.renderSettingsTile('sound', '声音和振动', (): void => {})
-        this.renderSettingsTile('skin', '皮肤', (): void => {})
+        this.renderSettingsTile('lexicon', '词库', (): void => {})
       }
       .width('100%')
     }
@@ -452,11 +477,16 @@ struct KeyboardPanel {
   private renderInputSettingsGrid() {
     Column({ space: 12 }) {
       Row({ space: 12 }) {
-        this.renderSettingsTile('拼', '中文拼音', (): void => {
+        this.renderSettingsTile('拼', '中文拼音（26 键）', (): void => {
           this.switchSettingsSubtype('zh-Hans-pinyin');
-        }, !this.isEnglishSubtype())
+          if (this.supportsTwentySixKey()) {
+            void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
+          }
+          this.closeSettingsOverlay();
+        }, !this.isEnglishSubtype() && this.uiState.keyboardLayout !== 'voice_panel')
         this.renderSettingsTile('EN', '英文输入', (): void => {
           this.switchSettingsSubtype('en-US-qwerty');
+          this.closeSettingsOverlay();
         }, this.isEnglishSubtype())
         this.renderSettingsTile('voice', '语音输入', (): void => {
           // 切换到语音面板时，确保使用支持语音的子类型
@@ -472,18 +502,6 @@ struct KeyboardPanel {
           void imeRuntime.getSessionManager()?.switchKeyboardLayout('voice_panel');
           this.closeSettingsOverlay();
         }, this.uiState.keyboardLayout === 'voice_panel')
-        this.renderSettingsTile('#', '符号面板', (): void => {
-          this.showSymbolPalette = true;
-          this.closeSettingsOverlay();
-        }, this.showSymbolPalette)
-      }
-      .width('100%')
-
-      Row({ space: 12 }) {
-        this.renderSettingsInfoTile('当前语言', this.uiState.currentSubtypeName)
-        this.renderSettingsInfoTile('会话状态', this.uiState.sessionActive ? '已连接' : '未连接')
-        this.renderSettingsInfoTile('语音入口', this.uiState.voiceEnabled ? '可用' : '关闭')
-        this.renderSettingsInfoTile('润色建议', this.uiState.polishEnabled ? '可用' : '关闭')
       }
       .width('100%')
     }
@@ -596,7 +614,7 @@ struct KeyboardPanel {
   @Builder
   private renderSettingsPager() {
     Row({ space: 10 }) {
-      ForEach([0, 1, 2, 3, 4, 5], (index: number) => {
+      ForEach([0, 1], (index: number) => {
         Column()
           .width(index === this.resolveSettingsPagerIndex() ? 18 : 7)
           .height(7)
@@ -702,7 +720,12 @@ struct KeyboardPanel {
                     .onClick(() => {
                       void imeRuntime.getSessionManager()?.selectCandidate(candidate.index);
                     })
-                }, (candidate: CandidateItem): string => `${candidate.index}-${candidate.label}`)
+                  // Key MUST include candidate.text: rime's candidate index/label
+                  // are always 0..N/"1".."N" per page, so two different pinyin
+                  // buffers can yield the same key triple and ArkTS would
+                  // reuse the Text node without refreshing, making the
+                  // candidate strip look stale across keystrokes.
+                }, (candidate: CandidateItem): string => `${candidate.index}-${candidate.label}-${candidate.text}`)
               }
             }
           }
@@ -970,9 +993,9 @@ struct KeyboardPanel {
     // letter-weight-unit is (rowInnerWidth - gapsTotal) / 10 pixels wide.
     // That way letter keys across rows line up visually despite each row
     // having different numbers of children.
-    Column({ space: 6 }) {
+    Column({ space: 4 }) {
       // Row 1 — 10 letter keys (Q..P), weight 1 each; 9 gaps.
-      Row({ space: 6 }) {
+      Row({ space: 5 }) {
         ForEach(QWERTY_TOP_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
         }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
@@ -983,7 +1006,7 @@ struct KeyboardPanel {
       // each side, so letters sit offset from Row 1 the way iOS renders it.
       // Blank() (empty Column) + layoutWeight(0.5) gives a pixel-scaled
       // indent that tracks the panel width instead of a fixed pad.
-      Row({ space: 6 }) {
+      Row({ space: 5 }) {
         Column().layoutWeight(0.5)
         ForEach(QWERTY_MIDDLE_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
@@ -993,7 +1016,7 @@ struct KeyboardPanel {
       .width('100%')
 
       // Row 3 — ⇧ (weight 1.5) + 7 letters (weight 1) + ⌫ (weight 1.5) = 10.
-      Row({ space: 6 }) {
+      Row({ space: 5 }) {
         this.renderReferenceQwertySideKey('⇧', (): void => {
           this.qwertyShiftEnabled = !this.qwertyShiftEnabled;
         }, this.qwertyShiftEnabled, 1.5)
@@ -1012,7 +1035,7 @@ struct KeyboardPanel {
       // = 9.9 total, visually matching the reference proportion where 符号 /
       // 完成 are the wide left/right anchors and mic is the space-bar-style
       // central key.
-      Row({ space: 6 }) {
+      Row({ space: 5 }) {
         this.renderReferenceQwertyBottomActionKey('符号', (): void => {
           this.showSymbolPalette = !this.showSymbolPalette;
         }, this.showSymbolPalette, 1.8)
@@ -1021,14 +1044,14 @@ struct KeyboardPanel {
           this.switchQuickSubtype();
         }, false, 1.1)
 
-        this.renderReferenceQwertyPunctuationKey('!', this.resolveQwertyCommaLabel(), (): void => {
-          this.commitText(this.resolveQwertyCommaOutput());
+        this.renderReferenceQwertyPunctuationKey(this.resolveQwertyCommaLabel(), (): void => {
+          void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyCommaOutput());
         }, 0.8)
 
         this.renderReferenceQwertyVoiceKey(2.5)
 
-        this.renderReferenceQwertyPunctuationKey('?', this.resolveQwertyPeriodLabel(), (): void => {
-          this.commitText(this.resolveQwertyPeriodOutput());
+        this.renderReferenceQwertyPunctuationKey(this.resolveQwertyPeriodLabel(), (): void => {
+          void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyPeriodOutput());
         }, 0.8)
 
         this.renderReferenceQwertyBottomActionKey('123', (): void => {
@@ -1050,45 +1073,89 @@ struct KeyboardPanel {
 
   @Builder
   private renderVoicePanel() {
-    Column({ space: 16 }) {
-      Button() {
-        if (this.uiState.voiceState === 'recording') {
-          Text('●')
-            .fontSize(48)
-            .fontColor('#FFFFFF')
-        } else {
-          this.renderIconAsset('mic', 48, 48)
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column({ space: 16 }) {
+        Stack() {
+          // Outer pulse ring: continuously expands and fades to visually tell
+          // the user the mic is actively listening / awaiting input. Driven by
+          // voicePulseExpanded which toggles on a timer while the voice panel
+          // is active. The inner ring is offset in phase so the two rings
+          // form a breathing ripple.
+          Column()
+            .width(120)
+            .height(120)
+            .borderRadius(60)
+            .backgroundColor(this.resolveVoicePulseColor())
+            .opacity(this.voicePulseExpanded ? 0 : 0.28)
+            .scale({ x: this.voicePulseExpanded ? 1.7 : 1, y: this.voicePulseExpanded ? 1.7 : 1 })
+            .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
+
+          Column()
+            .width(120)
+            .height(120)
+            .borderRadius(60)
+            .backgroundColor(this.resolveVoicePulseColor())
+            .opacity(this.voicePulseExpanded ? 0.22 : 0)
+            .scale({ x: this.voicePulseExpanded ? 1 : 1.4, y: this.voicePulseExpanded ? 1 : 1.4 })
+            .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
+
+          Button() {
+            if (this.uiState.voiceState === 'recording') {
+              Text('●')
+                .fontSize(48)
+                .fontColor('#FFFFFF')
+            } else {
+              this.renderIconAsset('mic', 48, 48)
+            }
+          }
+          .width(120)
+          .height(120)
+          .type(ButtonType.Circle)
+          .backgroundColor(
+            this.uiState.voiceState === 'recording' ? '#B36D47' :
+            this.uiState.voiceState === 'error' ? '#D9534F' : '#7A835E'
+          )
+          .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
+          .onClick(() => {
+            this.startOrStopVoice();
+          })
+        }
+        .width(220)
+        .height(220)
+        .alignContent(Alignment.Center)
+
+        if (this.uiState.voiceState !== 'recording' && this.uiState.voiceStatusText.length > 0) {
+          Text(this.uiState.voiceStatusText)
+            .fontSize(12)
+            .fontColor(this.uiState.voiceState === 'error' ? '#D9534F' : '#606168')
+            .textAlign(TextAlign.Center)
         }
       }
-      .width(120)
-      .height(120)
-      .type(ButtonType.Circle)
-      .backgroundColor(
-        this.uiState.voiceState === 'recording' ? '#B36D47' :
-        this.uiState.voiceState === 'error' ? '#D9534F' : '#7A835E'
-      )
-      .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
-      .onClick(() => {
-        this.startOrStopVoice();
-      })
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
 
-      if (this.uiState.voiceState === 'recording' && this.uiState.voiceTranscriptPreview.length > 0) {
+      // Realtime transcript overlay: anchored to the top-left of the voice
+      // panel so text streams in from left to right and wraps downward,
+      // visually overlapping the pulse rings and mic circle below. The
+      // transparent hit-test keeps taps falling through to the record
+      // button underneath.
+      if (this.uiState.voiceTranscriptPreview.length > 0) {
         Text(this.uiState.voiceTranscriptPreview)
-          .fontSize(14)
-          .fontColor('#333333')
-          .textAlign(TextAlign.Center)
-          .maxLines(3)
-      } else if (this.uiState.voiceStatusText.length > 0) {
-        Text(this.uiState.voiceStatusText)
-          .fontSize(12)
-          .fontColor(this.uiState.voiceState === 'error' ? '#D9534F' : '#606168')
-          .textAlign(TextAlign.Center)
+          .fontSize(16)
+          .fontColor('#1C1C1F')
+          .fontWeight(FontWeight.Medium)
+          .textAlign(TextAlign.Start)
+          .maxLines(8)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 12, bottom: 0 })
+          .hitTestBehavior(HitTestMode.Transparent)
       }
     }
     .width('100%')
     .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
@@ -1514,18 +1581,18 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertyLetterKey(descriptor: QwertyKeyDescriptor) {
-    Column({ space: 3 }) {
+    Column({ space: 1 }) {
       Text(descriptor.hint)
-        .fontSize(10)
+        .fontSize(8)
         .fontColor('#A4A6AD')
 
       Text(descriptor.label)
-        .fontSize(24)
-        .minFontSize(14)
-        .maxFontSize(24)
+        .fontSize(15)
+        .minFontSize(10)
+        .maxFontSize(15)
         .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .maxLines(1)
-        .fontWeight(FontWeight.Medium)
+        .fontWeight(FontWeight.Normal)
         .fontColor('#17181C')
     }
     .justifyContent(FlexAlign.Center)
@@ -1641,24 +1708,20 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertyPunctuationKey(
-    hint: string,
     label: string,
     action: () => void,
     weight: number = 0.76
   ) {
-    Column({ space: 4 }) {
-      Text(hint)
-        .fontSize(10)
-        .fontColor('#A4A6AD')
-
+    Column() {
       Text(label)
-        .fontSize(20)
+        .fontSize(18)
         .minFontSize(12)
-        .maxFontSize(20)
+        .maxFontSize(18)
         .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .maxLines(1)
         .fontWeight(FontWeight.Medium)
         .fontColor('#16171B')
+        .textAlign(TextAlign.Center)
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
@@ -1786,28 +1849,28 @@ struct KeyboardPanel {
   }
 
   private resolveReferenceQwertyHeight(): number {
-    return 252;
+    return 204;
   }
 
   private resolveReferenceQwertyRowHeight(): number {
-    return 52;
+    return 44;
   }
 
   private resolveReferenceQwertyBottomHeight(): number {
-    return 50;
+    return 42;
   }
 
   private resolveReferenceQwertyBottomFontSize(label: string): number {
     if (label === '中/英') {
-      return 10;
+      return 9;
     }
     if (label === '完成' || label === '符号') {
-      return 13;
-    }
-    if (label === '123') {
       return 12;
     }
-    return label.length > 2 ? 11 : 13;
+    if (label === '123') {
+      return 11;
+    }
+    return label.length > 2 ? 10 : 12;
   }
 
   private handleReferenceQwertyLetterInput(value: string): void {
@@ -1870,6 +1933,16 @@ struct KeyboardPanel {
 
   private canUseSendAction(): boolean {
     return this.uiState.sessionActive || this.uiState.voiceDraftText.length > 0;
+  }
+
+  private resolveVoicePulseColor(): string {
+    if (this.uiState.voiceState === 'error') {
+      return '#D9534F';
+    }
+    if (this.uiState.voiceState === 'recording') {
+      return '#B36D47';
+    }
+    return '#7A835E';
   }
 
   private startOrStopVoice(): void {
@@ -2085,9 +2158,6 @@ struct KeyboardPanel {
   private resolveSettingsPagerIndex(): number {
     if (this.activeSettingsTab === 'input') {
       return 1;
-    }
-    if (this.activeSettingsTab === 'layout') {
-      return 2;
     }
     return 0;
   }

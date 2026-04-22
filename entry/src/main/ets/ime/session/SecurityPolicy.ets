@@ -24,13 +24,20 @@ export class SecurityPolicy {
       };
     }
 
+    // Many real-device hosts don't report any input pattern (pattern=-1)
+    // even though the field is an ordinary text box. Treating "FULL security
+    // mode + unknown pattern" as a hard sensitive field silently disables
+    // voice input everywhere on such hosts. Instead, treat unknown pattern
+    // as a soft restriction: allow voice/polish per the user's request,
+    // but turn off personalized learning so we don't accidentally learn
+    // from a field that really is sensitive.
     if (securityMode === inputMethodEngine.SecurityMode.FULL && SecurityPolicy.isUnknownPattern(pattern)) {
       return {
-        voiceEnabled: false,
-        polishEnabled: false,
+        voiceEnabled: voiceRequested,
+        polishEnabled: polishRequested,
         personalizedLearning: false,
-        restrictedReason: 'Security mode full with unknown pattern',
-        isSensitiveField: true
+        restrictedReason: 'Security mode full with unknown pattern (soft restriction)',
+        isSensitiveField: false
       };
     }
 

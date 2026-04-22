@@ -19,39 +19,58 @@ interface RemoteAsrPayload {
 }
 
 const BUILTIN_ASR_FRAME_BYTES = 640;
+// HarmonyOS speechRecognizer 默认为 short-speech，单句 VAD 结束后引擎会停止接收音频。
+// extraParams.recognitionMode = 1 启用长语音连续识别，避免录音只能说一句话。
+const BUILTIN_ASR_RECOGNITION_MODE_LONG: number = 1;
+const BUILTIN_ASR_VAD_END_SILENCE_MS: number = 2000;
+const BUILTIN_ASR_MAX_AUDIO_MS: number = 60000;
 
 interface SpeechRecognizerApi {
   createEngine(params: speechRecognizer.CreateEngineParams): Promise<speechRecognizer.SpeechRecognitionEngine>;
 }
 
-class BuiltinAsrListenerAdapter implements speechRecognizer.RecognitionListener {
-  private readonly onTranscript: (text: string) => void;
+interface BuiltinAsrListenerCallbacks {
+  onStart: (sessionId: string) => void;
+  onResult: (result: speechRecognizer.SpeechRecognitionResult) => void;
+  onComplete: (sessionId: string, eventMessage: string) => void;
+  onError: (errorCode: number, errorMessage: string) => void;
+  onEvent: (eventCode: number, eventMessage: string) => void;
+}
 
-  constructor(onTranscript: (text: string) => void) {
-    this.onTranscript = onTranscript;
+class BuiltinAsrListenerAdapter implements speechRecognizer.RecognitionListener {
+  private readonly callbacks: BuiltinAsrListenerCallbacks;
+
+  constructor(callbacks: BuiltinAsrListenerCallbacks) {
+    this.callbacks = callbacks;
   }
 
   onStart(sessionId: string, eventMessage: string): void {
     hilog.info(0xFF10, 'VoiceCaptureService', 'builtin ASR onStart: %{public}s', eventMessage);
+    this.callbacks.onStart(sessionId);
   }
 
   onResult(sessionId: string, result: speechRecognizer.SpeechRecognitionResult): void {
-    hilog.info(0xFF10, 'VoiceCaptureService', 'builtin ASR onResult: %{public}s', result.result);
-    this.onTranscript(result.result);
+    hilog.info(0xFF10, 'VoiceCaptureService',
+      'builtin ASR onResult isFinal=%{public}s isLast=%{public}s text=%{public}s',
+      String(result.isFinal), String(result.isLast), result.result);
+    this.callbacks.onResult(result);
   }
 
   onComplete(sessionId: string, eventMessage: string): void {
     hilog.info(0xFF10, 'VoiceCaptureService', 'builtin ASR onComplete: %{public}s', eventMessage);
+    this.callbacks.onComplete(sessionId, eventMessage);
   }
 
   onError(sessionId: string, errorCode: number, errorMessage: string): void {
     hilog.error(0xFF10, 'VoiceCaptureService',
       'builtin ASR onError: %{public}d %{public}s', errorCode, errorMessage);
+    this.callbacks.onError(errorCode, errorMessage);
   }
 
   onEvent(sessionId: string, eventCode: number, eventMessage: string): void {
     hilog.info(0xFF10, 'VoiceCaptureService',
       'builtin ASR onEvent: %{public}d %{public}s', eventCode, eventMessage);
+    this.callbacks.onEvent(eventCode, eventMessage);
   }
 }
 
@@ -67,9 +86,17 @@ export class VoiceCaptureService {
   private asrEngine?: speechRecognizer.SpeechRecognitionEngine;
   private asrSessionId: string = '';
   private asrResultText: string = '';
+  private asrFinalizedText: string = '';
+  private asrSampleRate: number = 16000;
+  private asrLanguage: string = '';
   private useBuiltinAsr: boolean = false;
   private pendingBuiltinAudio: Uint8Array = new Uint8Array(0);
   private onTranscriptUpdate?: (text: string) => void;
+  // True only between a successful startListening and the matching onComplete/onError.
+  // Used as the mutex for restart attempts and as the gate that decides whether
+  // incoming audio frames can be written to the engine immediately.
+  private asrListening: boolean = false;
+  private asrRestartScheduled: boolean = false;
 
   private readonly onReadData = (buffer: ArrayBuffer): void => {
     if (!this.state.active) {
@@ -108,12 +135,19 @@ export class VoiceCaptureService {
     }
     this.resetChunks();
     this.asrResultText = '';
+    this.asrFinalizedText = '';
+    this.asrListening = false;
+    this.asrRestartScheduled = false;
     this.useBuiltinAsr = false;
     this.pendingBuiltinAudio = new Uint8Array(0);
 
     let sampleRate = resolveSampleRate(config.sampleRate);
 
-    // 未配置远程 ASR 且当前语言为中文时，尝试使用系统内置 ASR
+    // 未配置远程 ASR 且当前语言为中文时，尝试使用系统内置 ASR。
+    // 真机上 CoreSpeechKit 可能因设备/签名/服务状态等原因初始化失败，
+    // 此处必须降级为"只采集 PCM + 最终走远程/mock 转写"，而不是直接
+    // 抛错阻塞整个录音启动——否则 UI 永远进入不到 'recording' 状态，
+    // 用户看到的就是"按大圆圈没有脉冲"。
     if (config.asrEndpoint.length === 0 && this.isLocaleSupportedByBuiltinAsr(locale)) {
       try {
         await this.initBuiltinAsr(config, locale);
@@ -121,8 +155,10 @@ export class VoiceCaptureService {
         hilog.info(0xFF10, 'VoiceCaptureService', 'builtin ASR initialized for %{public}s', locale);
       } catch (error) {
         let errorMsg = (error as Error).message ?? String(error);
-        hilog.error(0xFF10, 'VoiceCaptureService', 'builtin ASR unavailable: %{public}s', errorMsg);
-        throw new Error(`系统 ASR 初始化失败: ${errorMsg}`);
+        hilog.warn(0xFF10, 'VoiceCaptureService',
+          'builtin ASR unavailable, falling back to audio-only capture: %{public}s', errorMsg);
+        this.shutdownBuiltinAsr();
+        this.useBuiltinAsr = false;
       }
     } else if (config.asrEndpoint.length === 0) {
       hilog.info(0xFF10, 'VoiceCaptureService',
@@ -362,28 +398,127 @@ export class VoiceCaptureService {
       }
       this.asrSessionId = `voice-${Date.now()}`;
       this.asrResultText = '';
+      this.asrFinalizedText = '';
+      this.asrSampleRate = config.sampleRate;
+      this.asrLanguage = locale;
 
-      let listener: speechRecognizer.RecognitionListener = new BuiltinAsrListenerAdapter((text: string): void => {
-        this.asrResultText = text;
-        if (this.onTranscriptUpdate) {
-          this.onTranscriptUpdate(text);
-        }
-      });
-      this.asrEngine.setListener(listener);
-
-      let audioInfo: speechRecognizer.AudioInfo = {
-        audioType: 'pcm',
-        sampleRate: config.sampleRate,
-        soundChannel: 1,
-        sampleBit: 16
-      };
-      let startParams: speechRecognizer.StartParams = {
-        sessionId: this.asrSessionId,
-        audioInfo: audioInfo
-      };
-      await this.asrEngine.startListening(startParams);
+      this.attachBuiltinAsrListener();
+      this.startBuiltinAsrListening(this.asrSessionId);
     } catch (error) {
       throw new Error(`SpeechRecognizer unavailable: ${(error as Error).message ?? String(error)}`);
+    }
+  }
+
+  private attachBuiltinAsrListener(): void {
+    if (!this.asrEngine) {
+      return;
+    }
+    let callbacks: BuiltinAsrListenerCallbacks = {
+      onStart: (_sessionId: string): void => {
+        // Engine is now ready to receive writeAudio for the current session.
+        // Flush anything the AudioCapturer buffered while we were between
+        // sessions so the first words after a pause are not dropped.
+        this.asrListening = true;
+        this.asrRestartScheduled = false;
+        this.drainBufferedAudioToEngine();
+      },
+      onResult: (result: speechRecognizer.SpeechRecognitionResult): void => {
+        this.handleBuiltinAsrResult(result);
+      },
+      onComplete: (_sessionId: string, _eventMessage: string): void => {
+        this.asrListening = false;
+        this.maybeRestartBuiltinAsrAfterComplete('onComplete');
+      },
+      onError: (errorCode: number, errorMessage: string): void => {
+        this.asrListening = false;
+        // 1002200010 = writeAudio 在未启动状态下被调用；engine 在长语音模式下仍可能主动停止，此处兜底重启
+        if (this.state.active && this.useBuiltinAsr) {
+          this.maybeRestartBuiltinAsrAfterComplete(`onError ${errorCode} ${errorMessage}`);
+        }
+      },
+      onEvent: (eventCode: number, _eventMessage: string): void => {
+        // eventCode 3 = 音频结束；若引擎自行结束而录音仍在继续，尝试重启
+        if (eventCode === 3 && this.state.active && this.useBuiltinAsr) {
+          this.asrListening = false;
+          this.maybeRestartBuiltinAsrAfterComplete('audio-ended');
+        }
+      }
+    };
+    let listener: speechRecognizer.RecognitionListener = new BuiltinAsrListenerAdapter(callbacks);
+    this.asrEngine.setListener(listener);
+  }
+
+  private startBuiltinAsrListening(sessionId: string): void {
+    if (!this.asrEngine) {
+      return;
+    }
+    let audioInfo: speechRecognizer.AudioInfo = {
+      audioType: 'pcm',
+      sampleRate: this.asrSampleRate,
+      soundChannel: 1,
+      sampleBit: 16
+    };
+    // 启用长语音模式，避免单句 VAD 结束后引擎停止接收音频
+    let extraParams: Record<string, Object> = {
+      'recognitionMode': BUILTIN_ASR_RECOGNITION_MODE_LONG,
+      'vadEndWaitMs': BUILTIN_ASR_VAD_END_SILENCE_MS,
+      'maxAudioDuration': BUILTIN_ASR_MAX_AUDIO_MS
+    };
+    let startParams: speechRecognizer.StartParams = {
+      sessionId: sessionId,
+      audioInfo: audioInfo,
+      extraParams: extraParams
+    };
+    this.asrListening = false;
+    this.asrEngine.startListening(startParams);
+  }
+
+  private handleBuiltinAsrResult(result: speechRecognizer.SpeechRecognitionResult): void {
+    let text = result.result ?? '';
+    if (result.isFinal) {
+      // 一句话的最终结果：累加到已定稿文本
+      if (text.length > 0) {
+        this.asrFinalizedText = this.asrFinalizedText.length > 0
+          ? `${this.asrFinalizedText}${text}`
+          : text;
+      }
+      this.asrResultText = this.asrFinalizedText;
+    } else {
+      // 中间结果：作为预览附加在已定稿文本之后
+      this.asrResultText = this.asrFinalizedText.length > 0
+        ? `${this.asrFinalizedText}${text}`
+        : text;
+    }
+    if (this.onTranscriptUpdate) {
+      this.onTranscriptUpdate(this.asrResultText);
+    }
+  }
+
+  private maybeRestartBuiltinAsrAfterComplete(reason: string): void {
+    if (!this.state.active || !this.useBuiltinAsr || !this.asrEngine) {
+      return;
+    }
+    // Coalesce the overlapping onComplete / onEvent(3) / onError bursts that
+    // the recognizer fires for a single VAD boundary into one restart.
+    if (this.asrRestartScheduled || this.asrListening) {
+      return;
+    }
+    this.asrRestartScheduled = true;
+    hilog.info(0xFF10, 'VoiceCaptureService',
+      'restarting builtin ASR listening, reason=%{public}s', reason);
+    // Keep whatever audio already accumulated in pendingBuiltinAudio; do NOT
+    // drop it — those bytes are what the user said right before/around the
+    // VAD boundary and would otherwise be lost. They will be written via
+    // drainBufferedAudioToEngine once onStart confirms the new session is
+    // ready.
+    this.asrSessionId = `voice-${Date.now()}`;
+    try {
+      this.startBuiltinAsrListening(this.asrSessionId);
+    } catch (error) {
+      hilog.warn(0xFF10, 'VoiceCaptureService',
+        'restart builtin ASR failed: %{public}s',
+        (error as Error).message ?? String(error));
+      this.asrRestartScheduled = false;
     }
   }
 
@@ -404,14 +539,37 @@ export class VoiceCaptureService {
     this.asrEngine = undefined;
     this.useBuiltinAsr = false;
     this.pendingBuiltinAudio = new Uint8Array(0);
+    this.asrListening = false;
+    this.asrRestartScheduled = false;
     this.onTranscriptUpdate = undefined;
   }
 
   private enqueueBuiltinAsrAudio(chunk: Uint8Array): void {
     this.pendingBuiltinAudio = concatUint8Arrays(this.pendingBuiltinAudio, chunk);
+    if (!this.asrListening) {
+      // Engine is between sessions (VAD just ended, restart pending). Keep
+      // accumulating so the first words after the pause survive.
+      return;
+    }
+    this.drainBufferedAudioToEngine();
+  }
+
+  private drainBufferedAudioToEngine(): void {
+    if (!this.asrEngine || !this.asrListening) {
+      return;
+    }
     while (this.pendingBuiltinAudio.byteLength >= BUILTIN_ASR_FRAME_BYTES) {
       let frame = this.pendingBuiltinAudio.slice(0, BUILTIN_ASR_FRAME_BYTES);
-      this.asrEngine?.writeAudio(this.asrSessionId, frame);
+      try {
+        this.asrEngine.writeAudio(this.asrSessionId, frame);
+      } catch (error) {
+        hilog.warn(0xFF10, 'VoiceCaptureService',
+          'writeAudio failed, will buffer and retry after restart: %{public}s',
+          (error as Error).message ?? String(error));
+        this.asrListening = false;
+        this.maybeRestartBuiltinAsrAfterComplete('writeAudio-failed');
+        return;
+      }
       this.pendingBuiltinAudio = this.pendingBuiltinAudio.slice(BUILTIN_ASR_FRAME_BYTES);
     }
   }

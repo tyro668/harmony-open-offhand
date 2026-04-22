@@ -48,9 +48,9 @@ const DEFAULT_STATE: KeyboardUiState = {
   candidates: [],
   currentSubtypeId: '',
   currentSubtypeName: '',
-  keyboardLayout: 't9_9',
+  keyboardLayout: 'qwerty_26',
   availableKeyboardLayouts: [
-    { id: 't9_9', label: '9 键' }
+    { id: 'qwerty_26', label: '26 键' }
   ],
   availableSubtypes: [],
   nineKeySequence: '',

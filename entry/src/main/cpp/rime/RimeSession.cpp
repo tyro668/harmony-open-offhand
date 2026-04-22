@@ -544,6 +544,20 @@ void DestroySession(const std::string &session_id)
     api->destroy_session(parsed_session_id);
 }
 
+bool FindSession(const std::string &session_id)
+{
+    std::lock_guard<std::mutex> lock(g_runtime.mutex);
+    RimeApi *api = GetApi();
+    if (api == nullptr) {
+        return false;
+    }
+    RimeSessionId parsed_session_id = 0;
+    if (!ParseSessionId(session_id, parsed_session_id)) {
+        return false;
+    }
+    return api->find_session(parsed_session_id) == True;
+}
+
 State ProcessKey(const std::string &session_id, int32_t key_code, int32_t modifier)
 {
     return StateForSessionOperation(session_id, [key_code, modifier](RimeApi *api, RimeSessionId parsed_session_id) {

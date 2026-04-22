@@ -34,6 +34,7 @@ std::string Init(const std::string &shared_data_dir, const std::string &user_dat
 std::string DeployIfNeeded();
 std::string CreateSession(const std::string &schema_id);
 void DestroySession(const std::string &session_id);
+bool FindSession(const std::string &session_id);
 State ProcessKey(const std::string &session_id, int32_t key_code, int32_t modifier);
 State GetState(const std::string &session_id);
 State SelectCandidate(const std::string &session_id, int32_t index);

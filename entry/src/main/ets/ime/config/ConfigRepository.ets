@@ -19,6 +19,7 @@ import {
   RimeOptionState,
   SubtypeSummary
 } from '../common/ImeTypes';
+import { getDefaultBuiltinModelSelection, resolveBuiltinModelSelection } from './BuiltinModels';
 import { cloneRuntimeSettings, createDefaultRuntimeSettings, OffhandSettingsStore } from '../../settings/OffhandSettingsStore';
 
 interface SubtypeEnvelope {
@@ -120,6 +121,22 @@ export class ConfigRepository {
 
   getDefaultSubtype(): OffhandSubtypeConfig {
     return this.resolveSubtypeById(this.config.app.defaultSubtypeId);
+  }
+
+  // Returns the subtype that should be activated when the IME first attaches
+  // to an editor, honoring the user-selected defaultEntryMode:
+  //   - 'keyboard' (default): use the configured default subtype (26-key pinyin).
+  //   - 'voice': use the voice subtype when voice input is enabled; otherwise fall back.
+  getPreferredInitialSubtype(): OffhandSubtypeConfig {
+    if (this.runtimeSettings.defaultEntryMode === 'voice' && this.runtimeSettings.enableVoice) {
+      for (let index = 0; index < this.subtypes.length; index++) {
+        let subtype = this.subtypes[index];
+        if (subtype.keyboardLayout === 'voice_panel') {
+          return subtype;
+        }
+      }
+    }
+    return this.getDefaultSubtype();
   }
 
   resolveSubtypeById(subtypeId: string): OffhandSubtypeConfig {
@@ -247,14 +264,7 @@ function createDefaultConfig(): OffhandImeConfig {
     autoPolishResult: true,
     mockTranscript: '这是一次语音输入示例'
   };
-  let llmConfig: OffhandLlmPolishConfig = {
-    enabled: true,
-    endpoint: '',
-    requestTimeoutMs: 12000,
-    autoPolishVoiceResult: true,
-    fallbackToLocalRewrite: true,
-    style: 'clean_conversational'
-  };
+  let llmConfig: OffhandLlmPolishConfig = createDefaultLlmPolishConfig();
   let privacyConfig: OffhandPrivacyConfig = {
     enablePersonalization: true
   };
@@ -272,23 +282,49 @@ function createDefaultConfig(): OffhandImeConfig {
 
 function applyRuntimeSettings(base: OffhandImeConfig, runtime: OffhandRuntimeSettings): OffhandImeConfig {
   let merged = cloneConfig(base);
+  let selection = resolveBuiltinModelSelection(runtime.llmProviderId, runtime.llmPresetId);
   merged.input.enablePreviewText = runtime.enablePreviewText;
   merged.voice.enabled = runtime.enableVoice;
   merged.voice.autoInsertResult = runtime.autoInsertVoiceResult;
   merged.voice.autoPolishResult = runtime.autoPolishVoiceResult;
   merged.voice.asrEndpoint = runtime.asrEndpoint;
   merged.llmPolish.enabled = runtime.enableCloudPolish;
+  merged.llmPolish.providerId = selection.provider.providerId;
+  merged.llmPolish.providerName = selection.provider.providerName;
+  merged.llmPolish.modelPresetId = selection.preset.presetId;
+  merged.llmPolish.modelDisplayName = selection.preset.displayName;
+  merged.llmPolish.apiModel = selection.preset.apiModel;
+  merged.llmPolish.protocol = selection.preset.protocol;
+  merged.llmPolish.endpoint = selection.preset.endpoint;
+  merged.llmPolish.apiKey = runtime.llmApiKey.trim();
   merged.llmPolish.autoPolishVoiceResult = runtime.autoPolishVoiceResult;
-  merged.llmPolish.endpoint = runtime.llmEndpoint;
   merged.llmPolish.style = runtime.llmStyle;
   merged.privacy.enablePersonalization = runtime.enablePersonalization;
   return merged;
 }
 
+function createDefaultLlmPolishConfig(): OffhandLlmPolishConfig {
+  let selection = getDefaultBuiltinModelSelection();
+  return {
+    enabled: true,
+    providerId: selection.provider.providerId,
+    providerName: selection.provider.providerName,
+    modelPresetId: selection.preset.presetId,
+    modelDisplayName: selection.preset.displayName,
+    apiModel: selection.preset.apiModel,
+    protocol: selection.preset.protocol,
+    endpoint: selection.preset.endpoint,
+    requestTimeoutMs: 12000,
+    autoPolishVoiceResult: true,
+    fallbackToLocalRewrite: true,
+    style: 'clean_conversational'
+  };
+}
+
 function createDefaultSubtypes(): OffhandSubtypeConfig[] {
   let zhExtra: OffhandSubtypeExtras = {
     punctuationMode: 'zh',
-    supportedKeyboardLayouts: ['t9_9', 'qwerty_26']
+    supportedKeyboardLayouts: ['qwerty_26']
   };
   let zhSubtype: OffhandSubtypeConfig = {
     id: 'zh-Hans-pinyin',
@@ -298,7 +334,7 @@ function createDefaultSubtypes(): OffhandSubtypeConfig[] {
     mode: 'lower',
     engine: 'librime',
     schemaId: 'offhand_pinyin',
-    keyboardLayout: 't9_9',
+    keyboardLayout: 'qwerty_26',
     voiceEnabled: true,
     llmPolishEnabled: true,
     domainHints: ['general', 'chat', 'office'],
@@ -358,6 +394,7 @@ function cloneOptionState(source: RimeOptionState): RimeOptionState {
 }
 
 function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
+  let defaultLlmConfig = createDefaultLlmPolishConfig();
   return {
     version: source.version,
     app: {
@@ -399,7 +436,14 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
     },
     llmPolish: {
       enabled: source.llmPolish.enabled,
-      endpoint: source.llmPolish.endpoint,
+      providerId: source.llmPolish.providerId ? source.llmPolish.providerId : defaultLlmConfig.providerId,
+      providerName: source.llmPolish.providerName ? source.llmPolish.providerName : defaultLlmConfig.providerName,
+      modelPresetId: source.llmPolish.modelPresetId ? source.llmPolish.modelPresetId : defaultLlmConfig.modelPresetId,
+      modelDisplayName: source.llmPolish.modelDisplayName ?
+        source.llmPolish.modelDisplayName : defaultLlmConfig.modelDisplayName,
+      apiModel: source.llmPolish.apiModel ? source.llmPolish.apiModel : defaultLlmConfig.apiModel,
+      protocol: source.llmPolish.protocol ? source.llmPolish.protocol : defaultLlmConfig.protocol,
+      endpoint: source.llmPolish.endpoint ? source.llmPolish.endpoint : defaultLlmConfig.endpoint,
       apiKey: source.llmPolish.apiKey,
       requestTimeoutMs: source.llmPolish.requestTimeoutMs,
       autoPolishVoiceResult: source.llmPolish.autoPolishVoiceResult,
@@ -453,7 +497,7 @@ function normalizeSubtype(source: OffhandSubtypeConfig): OffhandSubtypeConfig {
     } else if (cloned.engine === 'local_english') {
       supportedLayouts = ['qwerty_26'];
     } else if (cloned.engine === 'librime') {
-      supportedLayouts = ['qwerty_26', 't9_9'];
+      supportedLayouts = ['qwerty_26'];
     } else {
       supportedLayouts = [cloned.keyboardLayout];
     }
@@ -477,7 +521,7 @@ function normalizeSubtype(source: OffhandSubtypeConfig): OffhandSubtypeConfig {
 }
 
 function normalizeKeyboardLayout(layout?: string): KeyboardLayoutId {
-  if (layout === 't9_9' || layout === 'voice_panel') {
+  if (layout === 'voice_panel') {
     return layout;
   }
   return 'qwerty_26';

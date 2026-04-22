@@ -57,7 +57,12 @@ export class EditorContextAdapter {
 
   async deleteBackward(length: number): Promise<boolean> {
     try {
-      return await this.inputClient.deleteBackward(length);
+      // HarmonyOS InputClient naming is counterintuitive: `deleteForward`
+      // deletes text BEFORE the cursor (Backspace behavior), while
+      // `deleteBackward` deletes text AFTER the cursor (Delete key). Our IME
+      // backspace button is expected to delete the char just typed, so it
+      // must call `deleteForward`.
+      return await this.inputClient.deleteForward(length);
     } catch (_) {
       return false;
     }

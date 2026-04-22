@@ -6,6 +6,7 @@ import {
   KeyboardLayoutOption,
   OffhandSubtypeConfig,
   PolishSuggestion,
+  RimeOptionState,
   RimeState,
   SessionCapabilitySnapshot
 } from '../common/ImeTypes';
@@ -66,6 +67,8 @@ export class SessionManager {
   private activeSessionContext?: InputSessionContext;
   private activeCapabilities?: SessionCapabilitySnapshot;
   private rimeSessionId: string = '';
+  private appliedRimeSchemaId: string = '';
+  private appliedRimeOptionsSignature: string = '';
   private pendingRollback?: CommitRollbackSnapshot;
   private pendingPolishText: string = '';
   private pendingVoiceDraftText: string = '';
@@ -86,7 +89,7 @@ export class SessionManager {
     this.context = context;
     await this.configRepository.initialize(context);
     this.initializeLanguageModelStore(context);
-    this.currentSubtype = this.configRepository.getDefaultSubtype();
+    this.currentSubtype = this.configRepository.getPreferredInitialSubtype();
     this.currentKeyboardLayout = this.currentSubtype.keyboardLayout;
     keyboardStateStore.setSubtypes(
       this.configRepository.listSubtypeSummaries(),
@@ -116,7 +119,8 @@ export class SessionManager {
       await this.configRepository.refreshRuntimeSettings(this.context);
     }
     if (!this.currentSubtype) {
-      this.currentSubtype = this.configRepository.getDefaultSubtype();
+      this.currentSubtype = this.configRepository.getPreferredInitialSubtype();
+      this.currentKeyboardLayout = this.currentSubtype.keyboardLayout;
     }
     await this.refreshSessionContext('inputStart');
   }
@@ -134,6 +138,8 @@ export class SessionManager {
       await this.finalizePendingRimeComposition();
       this.rimeService.destroySession(this.rimeSessionId);
       this.rimeSessionId = '';
+      this.appliedRimeSchemaId = '';
+      this.appliedRimeOptionsSignature = '';
     }
     this.persistRimeUserDataSafely('inputStop');
     this.persistLanguageModelSafely('inputStop');
@@ -346,6 +352,26 @@ export class SessionManager {
       await this.applyRimeState(state, previousState);
       return;
     }
+    await this.commitDirectText(text, `Inserted "${text}"`);
+  }
+
+  // Punctuation keys (comma/period) must bypass the Rime pinyin pipeline:
+  // feeding `，`/`。` into librime via processText is treated as raw input and
+  // nothing gets committed, which looked to users like the key did nothing.
+  // Here we flush any pending composition first, then insert the punctuation
+  // directly into the editor.
+  async insertPunctuation(text: string): Promise<void> {
+    if (!this.editorAdapter || text.length === 0) {
+      return;
+    }
+    if (this.rimeSessionId.length > 0) {
+      await this.finalizePendingRimeComposition();
+    }
+    if (this.shouldUseEnglishEngine() && this.englishEngine.hasComposition()) {
+      await this.applyEnglishState(this.englishEngine.processSpace(this.shouldAutoCapitalizeEnglish()));
+    }
+    this.clearRollbackState();
+    this.invalidatePolishActions();
     await this.commitDirectText(text, `Inserted "${text}"`);
   }
 
@@ -624,9 +650,9 @@ export class SessionManager {
             sourceText: transcript,
             suggestedText: polishResult.text,
             source: 'voice_auto',
-            provider: polishResult.source
+            provider: polishResult.provider
           });
-          statusSource = polishResult.source;
+          statusSource = polishResult.provider;
         }
       }
 
@@ -681,7 +707,7 @@ export class SessionManager {
       });
       if (result.text.length === 0 || result.text === sourceText) {
         keyboardStateStore.patch({
-          statusText: `Polish finished without changes (${result.source})`,
+          statusText: `Polish finished without changes (${result.provider})`,
           isPolishRunning: false
         });
         return;
@@ -690,14 +716,14 @@ export class SessionManager {
         sourceText: sourceText,
         suggestedText: result.text,
         source: 'manual',
-        provider: result.source
+        provider: result.provider
       });
       keyboardStateStore.patch({
-        statusText: `Polish suggestion ready (${result.source})`,
+        statusText: `Polish suggestion ready (${result.provider})`,
         voiceTranscriptPreview: result.text,
         isPolishRunning: false
       });
-      void ImeTelemetry.trackBehavior('polish_suggested', `provider=${result.source};source=manual`);
+      void ImeTelemetry.trackBehavior('polish_suggested', `provider=${result.provider};transport=${result.source};source=manual`);
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Polish failed: %{public}s', JSON.stringify(error));
       keyboardStateStore.patch({
@@ -888,6 +914,8 @@ export class SessionManager {
     if (this.rimeSessionId.length > 0) {
       this.rimeService.destroySession(this.rimeSessionId);
       this.rimeSessionId = '';
+      this.appliedRimeSchemaId = '';
+      this.appliedRimeOptionsSignature = '';
     }
     this.syncNineKeyState(this.nineKeyEngine.reset());
     this.clearRollbackState();
@@ -961,6 +989,8 @@ export class SessionManager {
     } else if (this.rimeSessionId.length > 0) {
       this.rimeService.destroySession(this.rimeSessionId);
       this.rimeSessionId = '';
+      this.appliedRimeSchemaId = '';
+      this.appliedRimeOptionsSignature = '';
       this.updateCandidateState(undefined);
       this.syncNineKeyState(this.nineKeyEngine.reset());
       await this.clearCurrentPreview();
@@ -976,6 +1006,10 @@ export class SessionManager {
     this.pendingVoiceStartRequested = false;
     hilog.info(DOMAIN, TAG, 'Starting queued voice input after session refresh via %{public}s', reason);
     await this.startVoiceInput();
+  }
+
+  private computeRimeOptionsSignature(options: RimeOptionState): string {
+    return `${options.ascii_mode ? 1 : 0}|${options.full_shape ? 1 : 0}|${options.emoji_suggestion === true ? 1 : options.emoji_suggestion === false ? 0 : 'u'}`;
   }
 
   private async ensureRimeSessionReady(): Promise<void> {
@@ -994,12 +1028,44 @@ export class SessionManager {
         options.resourceVersion ?? ''
       );
       this.rimeService.initialize(options);
-      if (this.rimeSessionId.length === 0) {
-        this.rimeSessionId = this.rimeService.createSession(this.currentSubtype.schemaId ?? options.schemaId);
-      } else if (this.currentSubtype.schemaId) {
-        this.rimeService.setSchema(this.rimeSessionId, this.currentSubtype.schemaId);
+      let desiredSchemaId = this.currentSubtype.schemaId ?? options.schemaId ?? '';
+      // The native layer (RimeService.initialize) may call FinalizeUnlocked()
+      // when init signature changes, which invalidates any previously created
+      // session id. Verify our cached sessionId is still live; drop it if not
+      // so the recreate path below runs instead of feeding a dead id into
+      // subsequent API calls (which would silently return empty states and
+      // make typed letters look like they were lost).
+      if (this.rimeSessionId.length > 0 && !this.rimeService.findSession(this.rimeSessionId)) {
+        hilog.warn(DOMAIN, TAG,
+          'ensureRimeSessionReady: cached session %{public}s no longer valid, recreating',
+          this.rimeSessionId);
+        this.rimeSessionId = '';
+        this.appliedRimeSchemaId = '';
+        this.appliedRimeOptionsSignature = '';
       }
-      this.rimeService.applyOptions(this.rimeSessionId, options.options);
+      let sessionJustCreated = false;
+      if (this.rimeSessionId.length === 0) {
+        this.rimeSessionId = this.rimeService.createSession(desiredSchemaId);
+        this.appliedRimeSchemaId = desiredSchemaId;
+        this.appliedRimeOptionsSignature = '';
+        sessionJustCreated = true;
+      }
+      // Only re-apply schema when it actually changed. `setSchema` invokes
+      // Rime's `select_schema`, which resets the current composition — calling
+      // it on every keystroke would wipe the in-flight pinyin input so only
+      // the latest single letter would ever accumulate.
+      if (!sessionJustCreated && desiredSchemaId.length > 0 && desiredSchemaId !== this.appliedRimeSchemaId) {
+        this.rimeService.setSchema(this.rimeSessionId, desiredSchemaId);
+        this.appliedRimeSchemaId = desiredSchemaId;
+        this.appliedRimeOptionsSignature = '';
+      }
+      // Same for options: `set_option` can reset menu state, so avoid
+      // re-applying identical options on every key press.
+      let optionsSignature = this.computeRimeOptionsSignature(options.options);
+      if (optionsSignature !== this.appliedRimeOptionsSignature) {
+        this.rimeService.applyOptions(this.rimeSessionId, options.options);
+        this.appliedRimeOptionsSignature = optionsSignature;
+      }
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Failed to initialize Rime session: %{public}s', JSON.stringify(error));
       keyboardStateStore.patch({
@@ -1286,6 +1352,7 @@ export class SessionManager {
     this.invalidatePolishActions();
     await this.ensureRimeSessionReady();
     if (this.rimeSessionId.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'typePinyinLetter aborted: no rime session for letter=%{public}s', normalized);
       return;
     }
     let previousState = this.rimeService.getState(this.rimeSessionId);
@@ -1298,7 +1365,49 @@ export class SessionManager {
       });
       return;
     }
+    hilog.info(DOMAIN, TAG,
+      'typePinyinLetter letter=%{public}s prevRaw=%{public}s session=%{public}s schema=%{public}s',
+      normalized, currentInput, this.rimeSessionId, previousState.schemaId);
     let state = this.rimeService.processText(this.rimeSessionId, normalized);
+    hilog.info(DOMAIN, TAG,
+      'typePinyinLetter -> newRaw=%{public}s composing=%{public}s commit=%{public}s candidates=%{public}d',
+      state.rawInput, state.composingText, state.commitText, state.candidates.length);
+    if (state.rawInput.length <= currentInput.length && state.commitText.length === 0) {
+      // Rime silently dropped the keypress. In the field this has two root
+      // causes: (a) the cached session id is stale so every native call hit
+      // EmptyStateForInvalidSession, and (b) Rime's ascii_composer ate the
+      // key. Explicitly re-probe session liveness, recreate if dead, then
+      // replay the intended full buffer via `set_input` so the user can keep
+      // composing instead of being stuck at a single letter.
+      let alive = this.rimeService.findSession(this.rimeSessionId);
+      hilog.warn(DOMAIN, TAG,
+        'typePinyinLetter: rawInput did not grow; sessionAlive=%{public}s session=%{public}s',
+        alive ? 'true' : 'false', this.rimeSessionId);
+      if (!alive) {
+        this.rimeSessionId = '';
+        this.appliedRimeSchemaId = '';
+        this.appliedRimeOptionsSignature = '';
+        await this.ensureRimeSessionReady();
+        if (this.rimeSessionId.length === 0) {
+          hilog.error(DOMAIN, TAG, 'typePinyinLetter: failed to recreate rime session');
+          return;
+        }
+      }
+      state = this.rimeService.setInput(this.rimeSessionId, nextInput);
+      hilog.info(DOMAIN, TAG,
+        'typePinyinLetter setInput -> raw=%{public}s composing=%{public}s candidates=%{public}d',
+        state.rawInput, state.composingText, state.candidates.length);
+      if (state.rawInput.length === 0) {
+        // setInput also failed. Last resort: replay the full pinyin buffer
+        // character-by-character through processKey so even a broken
+        // ascii_composer gets the chance to accumulate.
+        hilog.warn(DOMAIN, TAG, 'typePinyinLetter: setInput ineffective, replaying via processText');
+        state = this.rimeService.processText(this.rimeSessionId, nextInput);
+        hilog.info(DOMAIN, TAG,
+          'typePinyinLetter replay -> raw=%{public}s composing=%{public}s candidates=%{public}d',
+          state.rawInput, state.composingText, state.candidates.length);
+      }
+    }
     await this.applyRimeState(state, previousState);
   }
 
@@ -1386,7 +1495,7 @@ export class SessionManager {
       return ['qwerty_26'];
     }
     if (subtype.engine === 'librime') {
-      return ['qwerty_26', 't9_9'];
+      return ['qwerty_26'];
     }
     return [subtype.keyboardLayout];
   }
