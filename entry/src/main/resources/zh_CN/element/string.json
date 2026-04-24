@@ -1,0 +1,40 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "HarmonyOS 原生输入法模块"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "释手输入法设置"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "释手输入法"
+    },
+    {
+      "name": "ime_name",
+      "value": "释手输入法"
+    },
+    {
+      "name": "ime_desc",
+      "value": "释手输入法 HarmonyOS 原生输入法扩展"
+    },
+    {
+      "name": "perm_reason_internet",
+      "value": "用于连接云端润色和配置服务。"
+    },
+    {
+      "name": "perm_reason_network_info",
+      "value": "用于检测网络状态，并在智能功能不可用时平滑降级。"
+    },
+    {
+      "name": "perm_reason_microphone",
+      "value": "用于从键盘启用语音输入。"
+    },
+    {
+      "name": "perm_reason_keep_bg",
+      "value": "用于在长时间语音输入期间保持识别会话稳定。"
+    }
+  ]
+}

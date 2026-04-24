@@ -1,5 +1,13 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BuiltinModelPreset, BuiltinModelProvider, CandidateItem, KeyboardLayoutId, KeyboardLayoutOption, SubtypeSummary } from '../common/ImeTypes';
+import {
+  BuiltinModelPreset,
+  BuiltinModelProvider,
+  CandidateItem,
+  KeyboardLayoutId,
+  KeyboardLayoutOption,
+  OffhandRuntimeSettings,
+  SubtypeSummary
+} from '../common/ImeTypes';
 import { imeRuntime } from '../runtime/ImeRuntime';
 import { KeyboardUiState, keyboardStateStore } from '../session/KeyboardStateStore';
 import { listBuiltinModelProviders, resolveBuiltinModelSelection } from '../config/BuiltinModels';
@@ -94,7 +102,7 @@ const QWERTY_BOTTOM_KEYS: QwertyKeyDescriptor[] = [
 struct KeyboardPanel {
   @State private uiState: KeyboardUiState = keyboardStateStore.getSnapshot();
   @State private showSettingsTray: boolean = false;
-  @State private activeSettingsTab: string = 'common';
+  @State private activeSettingsTab: string = 'input';
   @State private showSymbolPalette: boolean = false;
   @State private qwertyShiftEnabled: boolean = false;
   // Pulse ring state for the voice waiting circle. `voicePulseExpanded`
@@ -106,7 +114,19 @@ struct KeyboardPanel {
   @State private llmDialogProviderId: string = '';
   @State private llmDialogPresetId: string = '';
   @State private llmDialogApiKey: string = '';
+  // Drill-down menu level: 'provider' shows the provider list, 'model' shows
+  // the models that belong to the currently entered provider. Using a single
+  // string keeps the state serialisable and diff-friendly for ArkUI.
+  @State private llmMenuLevel: string = 'provider';
+  // Provider the user drilled into at level 2; may differ from the currently
+  // saved selection (`llmDialogProviderId`) until they pick a model.
+  @State private llmMenuStackProviderId: string = '';
   @State private llmSaveStatus: string = '';
+  @State private runtimeEnableVoice: boolean = true;
+  @State private runtimeEnableCloudPolish: boolean = true;
+  @State private runtimeAutoPolishVoiceResult: boolean = true;
+  @State private runtimeDefaultEntryMode: string = 'keyboard';
+  @State private runtimeSaveStatus: string = '';
   private voicePulseTimer?: number;
   private unsubscribe?: () => void;
 
@@ -127,7 +147,7 @@ struct KeyboardPanel {
       if (!state.sessionActive) {
         if (!this.showSettingsTray) {
           this.showSymbolPalette = false;
-          this.activeSettingsTab = 'common';
+          this.activeSettingsTab = 'input';
         }
         this.qwertyShiftEnabled = false;
       }
@@ -148,8 +168,11 @@ struct KeyboardPanel {
   }
 
   private syncVoicePulseAnimation(state: KeyboardUiState): void {
+    // Drive the large circle's breathing animation whenever the voice panel
+    // is actively listening OR the LLM is polishing the transcript, so the
+    // user always has a visual cue that background work is happening.
     let shouldPulse = state.keyboardLayout === 'voice_panel'
-      && state.voiceState === 'recording'
+      && (state.voiceState === 'recording' || state.isPolishRunning)
       && state.voiceEnabled;
     if (shouldPulse) {
       this.startVoicePulseAnimation();
@@ -383,33 +406,30 @@ struct KeyboardPanel {
         .height(8)
 
       if (this.activeSettingsTab === 'llm') {
-        // LLM tab takes the entire remaining space and renders its own
-        // padding. We intentionally skip the pager dots and trailing Blank
-        // used by common/input because the LLM editor needs the full panel
-        // height for the provider/model chips + API key input.
         this.renderLlmSettingsGrid()
       } else {
-        if (this.activeSettingsTab === 'input') {
-          this.renderInputSettingsGrid()
-        } else {
-          this.renderCommonSettingsGrid()
+        Scroll() {
+          Column({ space: 12 }) {
+            if (this.activeSettingsTab === 'input') {
+              this.renderInputSettingsGrid()
+            } else {
+              this.renderCommonSettingsGrid()
+            }
+
+            Blank()
+              .height(8)
+          }
+          .width('100%')
         }
-
-        Blank()
-          .layoutWeight(1)
-
-        Blank()
-          .height(6)
-
-        this.renderSettingsPager()
-
-        Blank()
-          .height(4)
+        .width('100%')
+        .layoutWeight(1)
+        .scrollBar(BarState.Auto)
+        .edgeEffect(EdgeEffect.Spring)
       }
     }
     .width('100%')
     .layoutWeight(1)
-    .padding({ left: 10, right: 10, top: 4, bottom: 0 })
+    .padding({ left: 10, right: 10, top: 4, bottom: 8 })
   }
 
   @Builder
@@ -428,22 +448,15 @@ struct KeyboardPanel {
         })
 
       Row({ space: 4 }) {
-        this.renderSettingsTabButton('common', '常用功能')
-        this.renderSettingsTabButton('input', '输入方式')
-        this.renderSettingsTabButton('llm', '大模型')
+        this.renderSettingsTabButton('input', '输入')
+        this.renderSettingsTabButton('common', '配置')
+        this.renderSettingsTabButton('llm', '模型')
       }
       .layoutWeight(1)
       .height(48)
       .padding({ left: 3, right: 3, top: 3, bottom: 3 })
       .backgroundColor('#D4D7DC')
       .borderRadius(24)
-
-      Image($r('app.media.ime_icon_settings_avatar'))
-        .width(42)
-        .height(42)
-        .objectFit(ImageFit.Cover)
-        .borderRadius(21)
-        .shadow(this.resolveGrayKeyShadow())
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
@@ -473,6 +486,8 @@ struct KeyboardPanel {
         this.activeSettingsTab = tabId;
         if (tabId === 'llm') {
           this.seedLlmDialogState();
+        } else if (tabId === 'common') {
+          this.seedRuntimeSettingsState();
         }
       })
   }
@@ -480,36 +495,140 @@ struct KeyboardPanel {
   @Builder
   private renderCommonSettingsGrid() {
     Column({ space: 12 }) {
-      Row({ space: 12 }) {
-        this.renderSettingsTile('gear', '设置', (): void => {
-          void imeRuntime.getSessionManager()?.openHostSettingsPage();
-          this.closeSettingsOverlay();
-        })
-        this.renderSettingsTile('lexicon', '词库', (): void => {})
+      this.renderRuntimeToggleCard(
+        '语音输入',
+        this.runtimeEnableVoice,
+        (): void => {
+          this.runtimeEnableVoice = !this.runtimeEnableVoice;
+          this.persistRuntimeSettings(this.runtimeEnableVoice ? '已开启语音输入' : '已关闭语音输入');
+        }
+      )
+      this.renderRuntimeToggleCard(
+        '文本润色',
+        this.runtimeEnableCloudPolish,
+        (): void => {
+          this.runtimeEnableCloudPolish = !this.runtimeEnableCloudPolish;
+          this.persistRuntimeSettings(this.runtimeEnableCloudPolish ? '已开启文本润色' : '已关闭文本润色');
+        }
+      )
+      this.renderRuntimeToggleCard(
+        '语音后自动润色',
+        this.runtimeAutoPolishVoiceResult,
+        (): void => {
+          this.runtimeAutoPolishVoiceResult = !this.runtimeAutoPolishVoiceResult;
+          this.persistRuntimeSettings(this.runtimeAutoPolishVoiceResult ? '已开启自动润色' : '已关闭自动润色');
+        },
+        this.runtimeEnableVoice && this.runtimeEnableCloudPolish
+      )
+      this.renderDefaultEntryModeCard()
+
+      if (this.runtimeSaveStatus.length > 0) {
+        Text(this.runtimeSaveStatus)
+          .fontSize(12)
+          .fontColor('#3478F6')
+          .width('100%')
       }
-      .width('100%')
     }
     .width('100%')
     .padding({ left: 0, right: 0, bottom: 4 })
   }
 
   @Builder
+  private renderRuntimeToggleCard(title: string, enabled: boolean, action: () => void, active: boolean = true) {
+    Row({ space: 12 }) {
+      Text(title)
+        .layoutWeight(1)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(active ? '#17181B' : '#8A8E97')
+        .textAlign(TextAlign.Start)
+
+      Button(active ? (enabled ? '已开' : '已关') : '不可用')
+        .height(34)
+        .fontSize(12)
+        .fontColor(enabled && active ? '#FFFFFF' : '#4D5058')
+        .backgroundColor(active ? (enabled ? '#3478F6' : '#E8EBF0') : '#F3F4F6')
+        .borderRadius(17)
+        .padding({ left: 14, right: 14, top: 0, bottom: 0 })
+        .enabled(active)
+        .onClick(() => {
+          action();
+        })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 16, bottom: 16 })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#F0F2F6' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
+  }
+
+  @Builder
+  private renderDefaultEntryModeCard() {
+    Column({ space: 12 }) {
+      Text('默认启动')
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#17181B')
+        .width('100%')
+        .textAlign(TextAlign.Start)
+
+      Row({ space: 10 }) {
+        this.renderRuntimeModeOption('keyboard', '键盘')
+        this.renderRuntimeModeOption('voice', '语音')
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, top: 16, bottom: 16 })
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#F0F2F6' })
+    .borderRadius(18)
+    .shadow(this.resolveWhiteKeyShadow())
+  }
+
+  @Builder
+  private renderRuntimeModeOption(value: string, label: string) {
+    Button(label)
+      .layoutWeight(1)
+      .height(38)
+      .fontSize(13)
+      .fontWeight(this.runtimeDefaultEntryMode === value ? FontWeight.Bold : FontWeight.Medium)
+      .fontColor(this.runtimeDefaultEntryMode === value ? '#FFFFFF' : '#4D5058')
+      .backgroundColor(this.runtimeDefaultEntryMode === value ? '#3478F6' : '#E8EBF0')
+      .borderRadius(19)
+      .onClick(() => {
+        if (this.runtimeDefaultEntryMode === value) {
+          return;
+        }
+        this.runtimeDefaultEntryMode = value;
+        this.persistRuntimeSettings(value === 'voice' ? '默认启动已设为语音' : '默认启动已设为键盘');
+      })
+  }
+
+  @Builder
   private renderInputSettingsGrid() {
     Column({ space: 12 }) {
       Row({ space: 12 }) {
-        this.renderSettingsTile('拼', '中文拼音（26 键）', (): void => {
+        this.renderSettingsTile('拼', '中文', (): void => {
           this.switchSettingsSubtype('zh-Hans-pinyin');
           if (this.supportsTwentySixKey()) {
             void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
           }
           this.closeSettingsOverlay();
         }, !this.isEnglishSubtype() && this.uiState.keyboardLayout !== 'voice_panel')
-        this.renderSettingsTile('EN', '英文输入', (): void => {
+        this.renderSettingsTile('EN', 'English', (): void => {
           this.switchSettingsSubtype('en-US-qwerty');
           this.closeSettingsOverlay();
         }, this.isEnglishSubtype())
-        this.renderSettingsTile('voice', '语音输入', (): void => {
-          // 切换到语音面板时，确保使用支持语音的子类型
+        this.renderSettingsTile('voice', '语音', (): void => {
+          if (!this.runtimeEnableVoice) {
+            this.activeSettingsTab = 'common';
+            this.runtimeSaveStatus = '先开启语音输入';
+            this.seedRuntimeSettingsState();
+            return;
+          }
           let voiceSubtype = this.findSubtypeById('zh-CN-voice');
           if (voiceSubtype.length > 0) {
             void imeRuntime.getSessionManager()?.switchSubtype(voiceSubtype);
@@ -535,164 +654,234 @@ struct KeyboardPanel {
   // the InputMethodExtensionAbility sandbox.
   @Builder
   private renderLlmSettingsGrid() {
-    Column({ space: 0 }) {
-      // Scrollable body — provider/model chips + API key + status.
-      Scroll() {
-        Column({ space: 10 }) {
-          // Provider row — Flex with Wrap so extra providers don't overflow.
-          Text('供应商')
-            .fontSize(12)
+    Column({ space: 8 }) {
+      // Drill-down menu: level 1 shows the provider list with a summary of
+      // the currently chosen model; tapping a row enters level 2 which lists
+      // the models for that provider. Picking a model returns to level 1.
+      Column({ space: 0 }) {
+        if (this.llmMenuLevel === 'model') {
+          this.renderLlmMenuHeader()
+        } else {
+          Text('选择供应商与模型')
+            .fontSize(11)
             .fontColor('#60636A')
             .width('100%')
-          Flex({
-            direction: FlexDirection.Row,
-            wrap: FlexWrap.Wrap,
-            justifyContent: FlexAlign.Start,
-            alignItems: ItemAlign.Center
-          }) {
-            ForEach(listBuiltinModelProviders(), (provider: BuiltinModelProvider) => {
-              Button() {
-                Text(provider.providerName)
-                  .fontSize(12)
-                  .fontColor(provider.providerId === this.llmDialogProviderId ? '#FFFFFF' : '#17181B')
-                  .textAlign(TextAlign.Center)
-                  .maxLines(1)
-              }
-              .height(34)
-              .margin({ right: 8, bottom: 8 })
-              .padding({ left: 14, right: 14, top: 0, bottom: 0 })
-              .backgroundColor(provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#FFFFFF')
-              .border({
-                width: 1,
-                color: provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#E4E6EA'
-              })
-              .borderRadius(17)
-              .onClick(() => {
-                this.llmDialogProviderId = provider.providerId;
-                this.llmDialogPresetId = provider.models.length > 0 ? provider.models[0].presetId : '';
-              })
-            }, (provider: BuiltinModelProvider) => provider.providerId)
+            .padding({ left: 8, top: 4, bottom: 6 })
+        }
+
+        Scroll() {
+          Column({ space: 4 }) {
+            if (this.llmMenuLevel === 'model') {
+              ForEach(this.resolveLlmModelsForMenuStackProvider(), (preset: BuiltinModelPreset) => {
+                this.renderLlmMenuRow(
+                  preset.displayName,
+                  '',
+                  this.isCurrentPreset(preset.presetId),
+                  false,
+                  (): void => {
+                    this.llmDialogProviderId = this.llmMenuStackProviderId;
+                    this.llmDialogPresetId = preset.presetId;
+                    this.llmMenuLevel = 'provider';
+                  }
+                )
+              }, (preset: BuiltinModelPreset): string =>
+                `${preset.presetId}:${this.isCurrentPreset(preset.presetId) ? 1 : 0}`)
+            } else {
+              ForEach(listBuiltinModelProviders(), (provider: BuiltinModelProvider) => {
+                this.renderLlmMenuRow(
+                  provider.providerName,
+                  this.resolveProviderSummary(provider),
+                  provider.providerId === this.llmDialogProviderId,
+                  true,
+                  (): void => {
+                    this.llmMenuStackProviderId = provider.providerId;
+                    this.llmMenuLevel = 'model';
+                  }
+                )
+              }, (provider: BuiltinModelProvider): string =>
+                `${provider.providerId}:${provider.providerId === this.llmDialogProviderId ? 1 : 0}`)
+            }
           }
           .width('100%')
-
-          // Model row
-          Text('模型')
-            .fontSize(12)
-            .fontColor('#60636A')
-            .width('100%')
-          Flex({
-            direction: FlexDirection.Row,
-            wrap: FlexWrap.Wrap,
-            justifyContent: FlexAlign.Start,
-            alignItems: ItemAlign.Center
-          }) {
-            ForEach(this.resolveLlmModelsForSelectedProvider(), (preset: BuiltinModelPreset) => {
-              Button() {
-                Text(preset.displayName)
-                  .fontSize(12)
-                  .fontColor(preset.presetId === this.llmDialogPresetId ? '#FFFFFF' : '#17181B')
-                  .textAlign(TextAlign.Center)
-                  .maxLines(1)
-              }
-              .height(34)
-              .margin({ right: 8, bottom: 8 })
-              .padding({ left: 14, right: 14, top: 0, bottom: 0 })
-              .backgroundColor(preset.presetId === this.llmDialogPresetId ? '#3478F6' : '#FFFFFF')
-              .border({
-                width: 1,
-                color: preset.presetId === this.llmDialogPresetId ? '#3478F6' : '#E4E6EA'
-              })
-              .borderRadius(17)
-              .onClick(() => {
-                this.llmDialogPresetId = preset.presetId;
-              })
-            }, (preset: BuiltinModelPreset) => preset.presetId)
-          }
-          .width('100%')
-
-          // API Key editor
-          Text('API Key')
-            .fontSize(12)
-            .fontColor('#60636A')
-            .width('100%')
-          Row({ space: 8 }) {
-            TextInput({ placeholder: '粘贴 API Key', text: this.llmDialogApiKey })
-              .type(InputType.Password)
-              .fontSize(13)
-              .height(40)
-              .layoutWeight(1)
-              .backgroundColor('#FFFFFF')
-              .borderRadius(12)
-              .padding({ left: 12, right: 12 })
-              .onChange((value: string) => {
-                this.llmDialogApiKey = value;
-              })
-            Button('清空')
-              .height(40)
-              .fontSize(13)
-              .fontColor('#17181B')
-              .backgroundColor('#FFFFFF')
-              .border({ width: 1, color: '#E4E6EA' })
-              .borderRadius(20)
-              .padding({ left: 14, right: 14, top: 0, bottom: 0 })
-              .onClick(() => {
-                this.llmDialogApiKey = '';
-                this.llmSaveStatus = '已清空 API Key，点击“保存”后生效。';
-              })
-          }
-          .width('100%')
-
-          if (this.llmSaveStatus.length > 0) {
-            Text(this.llmSaveStatus)
-              .fontSize(12)
-              .fontColor('#3478F6')
-              .width('100%')
-          }
-
-          // Trailing spacer so the last element isn't flush against the
-          // fixed bottom action bar.
-          Blank()
-            .height(12)
+          .padding({ left: 4, right: 4, top: 2, bottom: 4 })
         }
         .width('100%')
-        .alignItems(HorizontalAlign.Start)
-        .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+        .layoutWeight(1)
+        .scrollBar(BarState.Auto)
+        .edgeEffect(EdgeEffect.Spring)
       }
-      .scrollBar(BarState.Auto)
-      .edgeEffect(EdgeEffect.Spring)
       .width('100%')
       .layoutWeight(1)
+      .backgroundColor('#F0F1F4')
+      .borderRadius(12)
+      .padding({ left: 4, right: 4, top: 6, bottom: 6 })
 
-      // Fixed bottom action row — stays visible regardless of scroll.
-      Row({ space: 12 }) {
-        Button('取消')
+      this.renderLlmApiKeyRow()
+
+      if (this.llmSaveStatus.length > 0) {
+        Text(this.llmSaveStatus)
+          .fontSize(11)
+          .fontColor('#3478F6')
+          .width('100%')
+          .padding({ left: 4 })
+      }
+
+      Row({ space: 8 }) {
+        Button('重置')
           .layoutWeight(1)
-          .height(44)
-          .fontSize(14)
+          .height(36)
+          .fontSize(13)
           .fontColor('#17181B')
           .backgroundColor('#FFFFFF')
           .border({ width: 1, color: '#E4E6EA' })
-          .borderRadius(22)
+          .borderRadius(18)
           .onClick(() => {
             this.seedLlmDialogState();
             this.llmSaveStatus = '';
           })
         Button('保存')
           .layoutWeight(1)
-          .height(44)
-          .fontSize(14)
+          .height(36)
+          .fontSize(13)
           .fontColor('#FFFFFF')
           .backgroundColor('#3478F6')
-          .borderRadius(22)
+          .borderRadius(18)
           .onClick(() => {
             this.saveLlmDialog();
           })
       }
       .width('100%')
-      .padding({ left: 4, right: 4, top: 8, bottom: 8 })
+      .padding({ left: 4, right: 4, top: 4, bottom: 4 })
     }
     .width('100%')
     .layoutWeight(1)
+  }
+
+  @Builder
+  private renderLlmMenuHeader() {
+    Row({ space: 6 }) {
+      Button() {
+        Row({ space: 4 }) {
+          Text('‹')
+            .fontSize(16)
+            .fontColor('#3478F6')
+          Text('返回')
+            .fontSize(12)
+            .fontColor('#3478F6')
+        }
+      }
+      .height(28)
+      .padding({ left: 8, right: 10, top: 0, bottom: 0 })
+      .backgroundColor('rgba(0,0,0,0)')
+      .onClick(() => {
+        this.llmMenuLevel = 'provider';
+      })
+
+      Text(this.resolveMenuStackProviderName())
+        .fontSize(12)
+        .fontColor('#17181B')
+        .fontWeight(FontWeight.Bold)
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .padding({ left: 4, right: 8, top: 2, bottom: 6 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private renderLlmMenuRow(
+    title: string,
+    summary: string,
+    selected: boolean,
+    showChevron: boolean,
+    action: () => void
+  ) {
+    Row({ space: 6 }) {
+      Column()
+        .width(3)
+        .height(22)
+        .backgroundColor(selected ? '#3478F6' : 'rgba(0,0,0,0)')
+        .borderRadius(1.5)
+
+      Column({ space: 2 }) {
+        Text(title)
+          .fontSize(13)
+          .fontColor(selected ? '#17181B' : '#20232A')
+          .fontWeight(selected ? FontWeight.Bold : FontWeight.Regular)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        if (summary.length > 0) {
+          Text(summary)
+            .fontSize(11)
+            .fontColor('#60636A')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      if (selected && !showChevron) {
+        Text('✓')
+          .fontSize(13)
+          .fontColor('#3478F6')
+          .padding({ right: 2 })
+      }
+      if (showChevron) {
+        Text('›')
+          .fontSize(16)
+          .fontColor('#A4A7AD')
+          .padding({ right: 2 })
+      }
+    }
+    .width('100%')
+    .height(summary.length > 0 ? 48 : 40)
+    .padding({ left: 4, right: 6 })
+    .backgroundColor(selected ? '#FFFFFF' : 'rgba(0,0,0,0)')
+    .borderRadius(10)
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderLlmApiKeyRow() {
+    Row({ space: 8 }) {
+      Text('API Key')
+        .fontSize(11)
+        .fontColor('#60636A')
+        .width(48)
+        .textAlign(TextAlign.Start)
+      TextInput({ placeholder: '粘贴 API Key', text: this.llmDialogApiKey })
+        .type(InputType.Password)
+        .fontSize(12)
+        .height(32)
+        .layoutWeight(1)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(10)
+        .padding({ left: 10, right: 10 })
+        .onChange((value: string) => {
+          this.llmDialogApiKey = value;
+        })
+      Button('清空')
+        .height(32)
+        .fontSize(12)
+        .fontColor('#17181B')
+        .backgroundColor('#FFFFFF')
+        .border({ width: 1, color: '#E4E6EA' })
+        .borderRadius(16)
+        .padding({ left: 12, right: 12, top: 0, bottom: 0 })
+        .onClick(() => {
+          this.llmDialogApiKey = '';
+          this.llmSaveStatus = '已清空';
+        })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
   }
 
   private resolveLlmModelsForSelectedProvider(): BuiltinModelPreset[] {
@@ -703,6 +892,58 @@ struct KeyboardPanel {
       }
     }
     return [];
+  }
+
+  private resolveLlmModelsForMenuStackProvider(): BuiltinModelPreset[] {
+    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
+    for (let i: number = 0; i < providers.length; i++) {
+      if (providers[i].providerId === this.llmMenuStackProviderId) {
+        return providers[i].models;
+      }
+    }
+    return [];
+  }
+
+  private resolveMenuStackProviderName(): string {
+    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
+    for (let i: number = 0; i < providers.length; i++) {
+      if (providers[i].providerId === this.llmMenuStackProviderId) {
+        return providers[i].providerName;
+      }
+    }
+    return '';
+  }
+
+  private resolveProviderSummary(provider: BuiltinModelProvider): string {
+    // Show the chosen model name only on the row for the active provider so
+    // level 1 communicates the current selection without extra affordances.
+    if (provider.providerId !== this.llmDialogProviderId) {
+      return '';
+    }
+    for (let i: number = 0; i < provider.models.length; i++) {
+      if (provider.models[i].presetId === this.llmDialogPresetId) {
+        return provider.models[i].displayName;
+      }
+    }
+    return '';
+  }
+
+  private isCurrentPreset(presetId: string): boolean {
+    return this.llmMenuStackProviderId === this.llmDialogProviderId
+      && presetId === this.llmDialogPresetId;
+  }
+
+  private seedRuntimeSettingsState(): void {
+    let session = imeRuntime.getSessionManager();
+    if (!session) {
+      return;
+    }
+    let runtime: OffhandRuntimeSettings = session.getRuntimeSettingsSnapshot();
+    this.runtimeEnableVoice = runtime.enableVoice;
+    this.runtimeEnableCloudPolish = runtime.enableCloudPolish;
+    this.runtimeAutoPolishVoiceResult = runtime.autoPolishVoiceResult;
+    this.runtimeDefaultEntryMode = runtime.defaultEntryMode === 'voice' ? 'voice' : 'keyboard';
+    this.runtimeSaveStatus = '';
   }
 
   private seedLlmDialogState(): void {
@@ -718,6 +959,31 @@ struct KeyboardPanel {
     this.llmDialogPresetId = resolved.preset.presetId;
     this.llmDialogApiKey = snap.apiKey;
     this.llmSaveStatus = '';
+    // Always return to level 1 so reopening the settings feels predictable.
+    this.llmMenuLevel = 'provider';
+    this.llmMenuStackProviderId = '';
+  }
+
+  private persistRuntimeSettings(successText: string): void {
+    let session = imeRuntime.getSessionManager();
+    if (!session) {
+      this.runtimeSaveStatus = '保存失败：会话未就绪';
+      return;
+    }
+    let runtime: OffhandRuntimeSettings = session.getRuntimeSettingsSnapshot();
+    runtime.enableVoice = this.runtimeEnableVoice;
+    runtime.enableCloudPolish = this.runtimeEnableCloudPolish;
+    runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
+    runtime.defaultEntryMode = this.runtimeDefaultEntryMode === 'voice' ? 'voice' : 'keyboard';
+    this.runtimeSaveStatus = '保存中…';
+    session.updateRuntimeSettings(runtime, 'keyboardSettings')
+      .then((): void => {
+        this.seedRuntimeSettingsState();
+        this.runtimeSaveStatus = successText;
+      })
+      .catch((error: Error): void => {
+        this.runtimeSaveStatus = '保存失败：' + (error.message ?? String(error));
+      });
   }
 
   private saveLlmDialog(): void {
@@ -732,7 +998,7 @@ struct KeyboardPanel {
     this.llmSaveStatus = '保存中…';
     session.updateLlmSelection(providerId, presetId, apiKey)
       .then((): void => {
-        this.llmSaveStatus = 'API Key 已保存，润色将使用最新配置。';
+        this.llmSaveStatus = '已保存';
       })
       .catch((error: Error): void => {
         this.llmSaveStatus = '保存失败：' + (error.message ?? String(error));
@@ -740,47 +1006,9 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderLayoutSettingsGrid() {
-    Column({ space: 12 }) {
-      Row({ space: 12 }) {
-        this.renderSettingsTile('9', '九键布局', (): void => {
-          if (this.supportsNineKey()) {
-            void imeRuntime.getSessionManager()?.switchKeyboardLayout('t9_9');
-            this.closeSettingsOverlay();
-          }
-        }, this.uiState.keyboardLayout === 't9_9')
-        this.renderSettingsTile('26', '26 键布局', (): void => {
-          if (this.supportsTwentySixKey()) {
-            void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
-            this.closeSettingsOverlay();
-          }
-        }, this.uiState.keyboardLayout === 'qwerty_26')
-        this.renderSettingsTile('语', '语音面板', (): void => {
-          void imeRuntime.getSessionManager()?.switchKeyboardLayout('voice_panel');
-          this.closeSettingsOverlay();
-        }, this.uiState.keyboardLayout === 'voice_panel')
-        this.renderSettingsInfoTile('当前模式', this.resolveLayoutDisplayLabel(this.uiState.keyboardLayout))
-      }
-      .width('100%')
-
-      Row({ space: 12 }) {
-        this.renderSettingsInfoTile('编辑器', this.uiState.editorSummary.length > 0 ? this.uiState.editorSummary : '普通文本')
-        this.renderSettingsInfoTile('候选页', `第 ${this.uiState.candidatePageNo + 1} 页`)
-        this.renderSettingsInfoTile('快捷切换', this.resolveQuickSwitchLabel())
-        this.renderSettingsTile('⟲', '关闭设置', (): void => {
-          this.closeSettingsOverlay();
-        })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .padding({ left: 0, right: 0, bottom: 4 })
-  }
-
-  @Builder
   private renderSettingsTile(icon: string, title: string, action: () => void, selected: boolean = false) {
     Button() {
-      Column({ space: 10 }) {
+      Column({ space: 8 }) {
         this.renderSettingsIconAsset(icon, 31, 31)
 
         Text(title)
@@ -791,7 +1019,7 @@ struct KeyboardPanel {
           .fontWeight(FontWeight.Medium)
           .fontColor('#4D5058')
           .textAlign(TextAlign.Center)
-          .maxLines(2)
+          .maxLines(1)
       }
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
@@ -800,7 +1028,7 @@ struct KeyboardPanel {
       .padding({ left: 6, right: 6, top: 4, bottom: 4 })
     }
     .layoutWeight(1)
-    .height(92)
+    .height(84)
     .backgroundColor(selected ? '#EDF3FF' : '#FFFFFF')
     .border({ width: 1, color: selected ? '#D5E4FF' : '#F5F6F8' })
     .borderRadius(20)
@@ -808,76 +1036,6 @@ struct KeyboardPanel {
     .onClick(() => {
       action();
     })
-  }
-
-  @Builder
-  private renderSettingsInfoTile(title: string, value: string) {
-    Column({ space: 6 }) {
-      Text(title)
-        .fontSize(11)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#6A6D75')
-        .textAlign(TextAlign.Center)
-        .maxLines(1)
-
-      Text(value)
-        .fontSize(12)
-        .minFontSize(9)
-        .maxFontSize(12)
-        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#202126')
-        .textAlign(TextAlign.Center)
-        .maxLines(3)
-    }
-    .layoutWeight(1)
-    .height(92)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
-    .padding({ left: 6, right: 6 })
-    .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#F5F6F8' })
-    .borderRadius(20)
-    .shadow(this.resolveWhiteKeyShadow())
-  }
-
-  @Builder
-  private renderSettingsPager() {
-    Row({ space: 10 }) {
-      ForEach([0, 1], (index: number) => {
-        Column()
-          .width(index === this.resolveSettingsPagerIndex() ? 18 : 7)
-          .height(7)
-          .backgroundColor(index === this.resolveSettingsPagerIndex() ? '#286CFF' : '#D0D3DA')
-          .borderRadius(999)
-      }, (index: number): string => `${index}`)
-    }
-    .width('100%')
-    .justifyContent(FlexAlign.Center)
-    .margin({ top: 4 })
-  }
-
-  @Builder
-  private renderStatusChipRow() {
-    Scroll() {
-      Row({ space: 8 }) {
-        this.renderStatusChip(`字段 ${this.uiState.securitySummary}`)
-        this.renderStatusChip(`语音 ${this.uiState.voiceEnabled ? '开' : '关'}`)
-        this.renderStatusChip(`润色 ${this.uiState.polishEnabled ? '开' : '关'}`)
-      }
-    }
-    .scrollable(ScrollDirection.Horizontal)
-    .width('100%')
-  }
-
-  @Builder
-  private renderStatusChip(label: string) {
-    Text(label)
-      .fontSize(10)
-      .fontColor('#5F5F63')
-      .padding({ top: 5, right: 8, bottom: 5, left: 8 })
-      .backgroundColor('#F2F2F5')
-      .borderRadius(999)
   }
 
   @Builder
@@ -1306,18 +1464,18 @@ struct KeyboardPanel {
     Stack({ alignContent: Alignment.TopStart }) {
       Column({ space: 16 }) {
         Stack() {
-          // Outer pulse ring: continuously expands and fades to visually tell
-          // the user the mic is actively listening / awaiting input. Driven by
-          // voicePulseExpanded which toggles on a timer while the voice panel
-          // is active. The inner ring is offset in phase so the two rings
-          // form a breathing ripple.
+          // Outer pulse ring: continuously expands and fades. Used for both
+          // recording and LLM polishing; color and amplitude vary by state.
           Column()
             .width(120)
             .height(120)
             .borderRadius(60)
             .backgroundColor(this.resolveVoicePulseColor())
-            .opacity(this.voicePulseExpanded ? 0 : 0.28)
-            .scale({ x: this.voicePulseExpanded ? 1.7 : 1, y: this.voicePulseExpanded ? 1.7 : 1 })
+            .opacity(this.voicePulseExpanded ? 0 : (this.uiState.isPolishRunning ? 0.34 : 0.28))
+            .scale({
+              x: this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 1.9 : 1.7) : 1,
+              y: this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 1.9 : 1.7) : 1
+            })
             .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
 
           Column()
@@ -1325,8 +1483,11 @@ struct KeyboardPanel {
             .height(120)
             .borderRadius(60)
             .backgroundColor(this.resolveVoicePulseColor())
-            .opacity(this.voicePulseExpanded ? 0.22 : 0)
-            .scale({ x: this.voicePulseExpanded ? 1 : 1.4, y: this.voicePulseExpanded ? 1 : 1.4 })
+            .opacity(this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 0.28 : 0.22) : 0)
+            .scale({
+              x: this.voicePulseExpanded ? 1 : (this.uiState.isPolishRunning ? 1.55 : 1.4),
+              y: this.voicePulseExpanded ? 1 : (this.uiState.isPolishRunning ? 1.55 : 1.4)
+            })
             .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
 
           Button() {
@@ -1349,6 +1510,22 @@ struct KeyboardPanel {
           .onClick(() => {
             this.startOrStopVoice();
           })
+
+          // Polishing-only label: a small "润色中" chip pinned to the bottom
+          // of the big circle. The pulse animation on the surrounding rings
+          // provides the motion cue; the button itself stays a stable,
+          // perfectly circular shape so the shape never morphs.
+          if (this.uiState.isPolishRunning) {
+            Text('润色中')
+              .fontSize(11)
+              .fontColor('#FFFFFF')
+              .padding({ left: 10, right: 10, top: 3, bottom: 3 })
+              .backgroundColor('#6F7F4F')
+              .borderRadius(10)
+              .opacity(this.voicePulseExpanded ? 1 : 0.72)
+              .margin({ top: 150 })
+              .animation({ duration: 1400, curve: Curve.EaseInOut, iterations: 1 })
+          }
         }
         .width(220)
         .height(220)
@@ -2169,6 +2346,9 @@ struct KeyboardPanel {
     if (this.uiState.voiceState === 'error') {
       return '#D9534F';
     }
+    if (this.uiState.isPolishRunning) {
+      return '#92A06A';
+    }
     if (this.uiState.voiceState === 'recording') {
       return '#B36D47';
     }
@@ -2228,13 +2408,16 @@ struct KeyboardPanel {
       return;
     }
     this.showSettingsTray = true;
-    this.activeSettingsTab = 'common';
+    this.activeSettingsTab = 'input';
+    this.seedRuntimeSettingsState();
     this.showSymbolPalette = false;
   }
 
   private closeSettingsOverlay(): void {
     this.showSettingsTray = false;
-    this.activeSettingsTab = 'common';
+    this.activeSettingsTab = 'input';
+    this.runtimeSaveStatus = '';
+    this.llmSaveStatus = '';
   }
 
   private supportsNineKey(): boolean {
@@ -2366,29 +2549,11 @@ struct KeyboardPanel {
     }
   }
 
-  private resolveLayoutDisplayLabel(layout: KeyboardLayoutId): string {
-    switch (layout) {
-      case 't9_9':
-        return '9 键';
-      case 'voice_panel':
-        return '语音';
-      default:
-        return '26 键';
-    }
-  }
-
   private shouldShowCandidateStrip(): boolean {
     return this.showSymbolPalette ||
       this.uiState.preedit.length > 0 ||
       this.uiState.candidates.length > 0 ||
       this.uiState.activeNineKeySpelling.length > 0 ||
       this.uiState.nineKeySpellings.length > 0;
-  }
-
-  private resolveSettingsPagerIndex(): number {
-    if (this.activeSettingsTab === 'input') {
-      return 1;
-    }
-    return 0;
   }
 }

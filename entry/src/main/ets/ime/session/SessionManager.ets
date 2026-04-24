@@ -4,6 +4,7 @@ import {
   InputSessionContext,
   KeyboardLayoutId,
   KeyboardLayoutOption,
+  OffhandRuntimeSettings,
   OffhandSubtypeConfig,
   PolishSuggestion,
   RimeOptionState,
@@ -95,13 +96,7 @@ export class SessionManager {
     this.context = context;
     await this.configRepository.initialize(context);
     this.initializeLanguageModelStore(context);
-    this.currentSubtype = this.configRepository.getPreferredInitialSubtype();
-    this.currentKeyboardLayout = this.currentSubtype.keyboardLayout;
-    keyboardStateStore.setSubtypes(
-      this.configRepository.listSubtypeSummaries(),
-      this.currentSubtype.id,
-      this.currentSubtype.name
-    );
+    this.applyPreferredInitialSubtype();
     keyboardStateStore.patch({
       isReady: true,
       statusText: 'IME bootstrap ready',
@@ -124,10 +119,10 @@ export class SessionManager {
     if (this.context) {
       await this.configRepository.refreshRuntimeSettings(this.context);
     }
-    if (!this.currentSubtype) {
-      this.currentSubtype = this.configRepository.getPreferredInitialSubtype();
-      this.currentKeyboardLayout = this.currentSubtype.keyboardLayout;
-    }
+    // Re-apply the preferred startup subtype for every fresh editor session so
+    // a settings change like "默认启动 = 语音" takes effect the next time the
+    // IME is invoked, instead of being masked by the previous session's layout.
+    this.applyPreferredInitialSubtype();
     await this.refreshSessionContext('inputStart');
   }
 
@@ -165,11 +160,31 @@ export class SessionManager {
   }
 
   async handleKeyboardShow(): Promise<void> {
+    if (this.context) {
+      try {
+        // 输入法扩展可能常驻后台；每次键盘即将显示时都重新读取
+        // preferences，确保设置应用刚刚 flush() 的配置可以立即生效。
+        await this.configRepository.refreshRuntimeSettings(this.context);
+        // keyboardShow 和 inputStart 可能并发到达。首轮显示时如果
+        // keyboardShow 先完成，这里也补一次默认启动模式同步，避免
+        // 面板先以旧布局打开，再等 inputStart 覆盖。
+        if (!this.activeSessionContext) {
+          this.applyPreferredInitialSubtype();
+        }
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'refreshRuntimeSettings on keyboardShow failed: %{public}s',
+          (error as Error).message ?? String(error));
+      }
+    }
     if (this.keyboardPanel) {
       await this.keyboardPanel.show();
     }
+    if (this.activeSessionContext && this.editorAdapter) {
+      await this.refreshSessionContext('keyboardShow');
+      return;
+    }
     keyboardStateStore.patch({
-      statusText: this.activeSessionContext ? 'Keyboard panel shown' : 'Keyboard shown without active session'
+      statusText: 'Keyboard panel shown'
     });
   }
 
@@ -182,28 +197,12 @@ export class SessionManager {
     });
   }
 
-  // Launches the companion EntryAbility so users can open the full settings
-  // page from the in-keyboard "设置" tile. The IME extension cannot host a
-  // full-screen settings UI itself, and on real devices tapping the gear tile
-  // was previously a no-op which looked broken.
-  async openHostSettingsPage(): Promise<void> {
-    if (!this.context) {
-      hilog.warn(DOMAIN, TAG, 'openHostSettingsPage: no extension context');
-      return;
-    }
-    try {
-      await this.context.startAbility({
-        bundleName: 'com.opensource.harmony.offhand',
-        abilityName: 'EntryAbility'
-      });
-    } catch (err) {
-      hilog.error(DOMAIN, TAG, 'openHostSettingsPage failed: %{public}s', JSON.stringify(err));
-    }
+  // Snapshot of the runtime settings so the in-keyboard configuration panel
+  // can read and edit the current state without exposing repository internals.
+  getRuntimeSettingsSnapshot(): OffhandRuntimeSettings {
+    return this.configRepository.getRuntimeSettings();
   }
 
-  // Snapshot of the LLM-related runtime settings so the in-keyboard settings
-  // tab can render the current provider / model / apiKey without exposing the
-  // ConfigRepository internals.
   getLlmSelectionSnapshot(): LlmSelectionSnapshot {
     let runtime = this.configRepository.getRuntimeSettings();
     let snapshot: LlmSelectionSnapshot = {
@@ -214,26 +213,70 @@ export class SessionManager {
     return snapshot;
   }
 
-  // Persist the LLM provider/model/apiKey from within the IME process and
-  // immediately refresh the runtime config so follow-up voice-polish calls
-  // pick up the new values. This path avoids the cross-ability sandbox
-  // problem entirely because both the write and the subsequent read happen
-  // inside the InputMethodExtensionAbility's own sandbox.
+  // Persist runtime settings entirely inside the IME process so the keyboard
+  // always reads back the same sandbox-local state it just wrote.
+  async updateRuntimeSettings(settings: OffhandRuntimeSettings, reason: string = 'updateRuntimeSettings'): Promise<void> {
+    if (!this.context) {
+      hilog.warn(DOMAIN, TAG, '%{public}s: no extension context', reason);
+      return;
+    }
+    await this.configRepository.saveRuntimeSettings(this.context, settings);
+    hilog.info(DOMAIN, TAG,
+      '%{public}s saved: voice=%{public}s polish=%{public}s autoPolish=%{public}s mode=%{public}s provider=%{public}s preset=%{public}s apiKeyLen=%{public}d',
+      reason,
+      String(settings.enableVoice),
+      String(settings.enableCloudPolish),
+      String(settings.autoPolishVoiceResult),
+      settings.defaultEntryMode,
+      settings.llmProviderId,
+      settings.llmPresetId,
+      settings.llmApiKey.length);
+
+    if (!settings.enableVoice) {
+      this.pendingVoiceStartRequested = false;
+      this.clearVoiceAutoStopTimer();
+      if (this.voiceCaptureService.isRecording()) {
+        await this.stopVoiceInput(true);
+      }
+      if (this.currentKeyboardLayout === 'voice_panel') {
+        let fallbackSubtype = this.configRepository.getDefaultSubtype();
+        this.currentSubtype = fallbackSubtype;
+        this.currentKeyboardLayout = fallbackSubtype.keyboardLayout;
+        keyboardStateStore.setSubtypes(
+          this.configRepository.listSubtypeSummaries(),
+          fallbackSubtype.id,
+          fallbackSubtype.name
+        );
+      }
+    }
+
+    if (this.activeSessionContext && this.editorAdapter) {
+      await this.refreshSessionContext(reason);
+      return;
+    }
+    keyboardStateStore.patch({
+      statusText: `Settings updated via ${reason}`,
+      keyboardLayout: this.getResolvedKeyboardLayout(),
+      availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
+      voiceEnabled: settings.enableVoice,
+      polishEnabled: settings.enableCloudPolish
+    });
+  }
+
   async updateLlmSelection(providerId: string, presetId: string, apiKey: string): Promise<void> {
     if (!this.context) {
       hilog.warn(DOMAIN, TAG, 'updateLlmSelection: no extension context');
       return;
     }
-    let runtime = this.configRepository.getRuntimeSettings();
+    let runtime = this.getRuntimeSettingsSnapshot();
     runtime.llmProviderId = providerId;
     runtime.llmPresetId = presetId;
     runtime.llmApiKey = apiKey.trim();
     try {
-      await this.configRepository.saveRuntimeSettings(this.context, runtime);
+      await this.updateRuntimeSettings(runtime, 'updateLlmSelection');
       hilog.info(DOMAIN, TAG,
         'updateLlmSelection saved: provider=%{public}s preset=%{public}s apiKeyLen=%{public}d',
         providerId, presetId, runtime.llmApiKey.length);
-      await this.refreshSessionContext('updateLlmSelection');
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'updateLlmSelection failed: %{public}s',
         (error as Error).message ?? String(error));
@@ -671,12 +714,15 @@ export class SessionManager {
         return;
       }
 
-      this.setVoiceDraftText(transcript);
-
-      // NOTE: do NOT insert the raw transcript yet — we want the editor to
-      // only ever show the polished version (or, when polish is disabled /
-      // failed, the raw transcript as a final fallback). Insertion is
-      // performed by `commitToEditor` once we have text to commit.
+      this.pendingVoiceDraftText = transcript;
+      // Keep the raw transcript internal only: show it as a live preview in
+      // the voice panel, but do NOT surface the “语音草稿” confirmation card
+      // and do NOT insert it into the editor. The editor only ever receives
+      // the final LLM-polished text.
+      keyboardStateStore.patch({
+        voiceDraftText: '',
+        voiceTranscriptPreview: transcript
+      });
 
       // Reload runtime settings right before polishing so any API key / model
       // update made in the settings UIAbility after this IME session started
@@ -723,11 +769,9 @@ export class SessionManager {
           statusText: 'LLM polishing voice transcript'
         });
 
-        // Commit helper: on the first call inserts into the editor, on
-        // subsequent calls replaces the previously committed text. This
-        // guarantees nothing reaches the editor until polished text is
-        // available (either the first SSE delta or the non-streaming
-        // result), and then progressively grows/replaces it.
+        // Commit helper: only writes the final polished text into the
+        // editor. Streaming deltas only update the in-panel preview so the
+        // editor is never filled with intermediate text.
         let displayedText = '';
         let commitToEditor = async (nextText: string): Promise<boolean> => {
           let editorAdapter = this.editorAdapter;
@@ -745,6 +789,7 @@ export class SessionManager {
           }
           if (ok) {
             displayedText = nextText;
+            this.pendingVoiceDraftText = '';
           }
           return ok;
         };
@@ -753,14 +798,12 @@ export class SessionManager {
           if (accumulated.length === 0) {
             return;
           }
-          let ok = await commitToEditor(accumulated);
-          if (ok) {
-            streamSucceededWithText = true;
-            keyboardStateStore.patch({
-              voiceTranscriptPreview: accumulated,
-              voiceStatusText: accumulated
-            });
-          }
+          // Stream deltas drive the in-panel preview/status only; the
+          // editor waits for the final polished result.
+          keyboardStateStore.patch({
+            voiceTranscriptPreview: accumulated,
+            voiceStatusText: accumulated
+          });
         };
         // Serialize delta→editor calls so a fast SSE stream doesn't overlap
         // insert/replace operations on the InputClient.
@@ -783,7 +826,7 @@ export class SessionManager {
             'voice polish: stream returned source=%{public}s provider=%{public}s textLen=%{public}d displayedLen=%{public}d',
             polishResult.source, polishResult.provider, polishResult.text.length, displayedText.length);
 
-          if (polishResult.text.length > 0 && polishResult.text !== displayedText) {
+          if (polishResult.text.length > 0) {
             let ok = await commitToEditor(polishResult.text);
             if (ok) {
               streamSucceededWithText = true;
@@ -834,34 +877,37 @@ export class SessionManager {
           }
         }
 
-        // Last-resort: both streaming and non-streaming polish produced
-        // no usable text — commit the raw ASR transcript so the user's
-        // speech is not silently dropped.
+        // Last-resort: both streaming and non-streaming polish produced no
+        // usable text. Do NOT auto-insert the raw ASR transcript — only the
+        // LLM-polished text is allowed to land in the editor. Surface the
+        // raw transcript as a manual voice draft so the user can still
+        // recover it from the panel if they want to.
         if (displayedText.length === 0) {
-          hilog.warn(DOMAIN, TAG, 'voice polish: no polished text produced, inserting raw transcript');
-          let ok = await commitToEditor(transcript);
-          if (ok) {
-            this.trackCommittedText(displayedText);
-            keyboardStateStore.patch({
-              voiceTranscriptPreview: displayedText
-            });
-          }
+          hilog.warn(DOMAIN, TAG, 'voice polish: no polished text produced, keeping raw transcript as manual draft');
+          this.setVoiceDraftText(transcript);
         }
       } else {
         hilog.info(DOMAIN, TAG, 'voice polish: skipped (gate closed)');
-        // Gate closed → behave as before: commit the raw ASR transcript.
-        await this.insertVoiceDraft();
+        // Gate closed → no LLM polish is going to happen. Surface the raw
+        // transcript as a manual voice draft instead of silently inserting
+        // unpolished text into the editor.
+        this.setVoiceDraftText(transcript);
       }
 
+      let hasPendingVoiceDraft = this.pendingVoiceDraftText.trim().length > 0;
       keyboardStateStore.patch({
         isPolishRunning: false
       });
       keyboardStateStore.patch({
         voiceState: 'idle',
         voiceStatusText: `Voice ready (${statusSource})`,
-        statusText: this.pendingPolishSuggestion ?
-          `Voice draft ready with suggestion (${statusSource})` :
-          `Voice draft ready (${statusSource})`
+        statusText: hasPendingVoiceDraft ?
+          (this.pendingPolishSuggestion ?
+            `Voice draft ready with suggestion (${statusSource})` :
+            `Voice draft ready (${statusSource})`) :
+          (this.pendingPolishSuggestion ?
+            `Voice result inserted with suggestion (${statusSource})` :
+            `Voice result inserted (${statusSource})`)
       });
       void ImeTelemetry.trackStatistic(
         'voice_complete',
@@ -1675,6 +1721,24 @@ export class SessionManager {
 
   private syncNineKeyState(state: NineKeyStateSnapshot): void {
     keyboardStateStore.setNineKeyState(state.digitSequence, state.spellings, state.activeSpelling);
+  }
+
+  private applyPreferredInitialSubtype(): void {
+    let runtime = this.configRepository.getRuntimeSettings();
+    let preferredSubtype = this.configRepository.getPreferredInitialSubtype();
+    this.currentSubtype = preferredSubtype;
+    this.currentKeyboardLayout = preferredSubtype.keyboardLayout;
+    hilog.info(DOMAIN, TAG,
+      'applyPreferredInitialSubtype: mode=%{public}s enableVoice=%{public}s subtype=%{public}s layout=%{public}s',
+      runtime.defaultEntryMode,
+      String(runtime.enableVoice),
+      preferredSubtype.id,
+      preferredSubtype.keyboardLayout);
+    keyboardStateStore.setSubtypes(
+      this.configRepository.listSubtypeSummaries(),
+      preferredSubtype.id,
+      preferredSubtype.name
+    );
   }
 
   private resolvePreferredKeyboardLayout(subtype: OffhandSubtypeConfig): KeyboardLayoutId {

@@ -1,20 +1,7 @@
 import abilityAccessCtrl from '@ohos.abilityAccessCtrl';
 import { common } from '@kit.AbilityKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { BuiltinModelPreset, BuiltinModelProvider, OffhandRuntimeSettings } from '../ime/common/ImeTypes';
-import {
-  getDefaultBuiltinModelSelection,
-  listBuiltinModelProviders,
-  resolveBuiltinModelSelection
-} from '../ime/config/BuiltinModels';
-import { cloneRuntimeSettings, createDefaultRuntimeSettings, OffhandSettingsStore } from '../settings/OffhandSettingsStore';
-
-const SETTINGS_LOG_DOMAIN: number = 0xFF10;
-const SETTINGS_LOG_TAG: string = 'OffhandSettingsPage';
 
 const MICROPHONE_PERMISSION: 'ohos.permission.MICROPHONE' = 'ohos.permission.MICROPHONE';
-const DEFAULT_MODEL_SELECTION = getDefaultBuiltinModelSelection();
-const BUILTIN_MODEL_PROVIDERS = listBuiltinModelProviders();
 
 const PAGE_BACKGROUND = '#F4F7FB';
 const CARD_BACKGROUND = '#FFFFFF';
@@ -25,80 +12,31 @@ const CARD_SHADOW: ShadowOptions = {
   offsetX: 0,
   offsetY: 6
 };
-const ICON_BADGE_BACKGROUND = '#ECFBF9';
 const PRIMARY_BLUE = '#1976F3';
-const SOFT_GRAY = '#EEF3F8';
-const TEXT_PRIMARY = '#121826';
-const TEXT_SECONDARY = '#667085';
-const TEXT_MUTED = '#96A0AE';
-const DIVIDER_COLOR = '#EEF2F6';
 const SUCCESS_GREEN = '#19A79C';
 const ERROR_ORANGE = '#C46B29';
-const OVERLAY_MASK = 'rgba(7, 15, 27, 0.38)';
-const DIALOG_BACKGROUND = '#FFFFFF';
+const TEXT_PRIMARY = '#121826';
+const TEXT_SECONDARY = '#667085';
 
 @Entry
 @Component
 struct Index {
-  @State private loaded: boolean = false;
-  @State private saveStatus: string = '加载中';
   @State private microphonePermissionStatus: string = '检查中';
-  @State private enablePreviewText: boolean = true;
-  @State private enableVoice: boolean = true;
-  @State private enableCloudPolish: boolean = true;
-  @State private enablePersonalization: boolean = true;
-  @State private autoInsertVoiceResult: boolean = false;
-  @State private autoPolishVoiceResult: boolean = true;
-  @State private asrEndpoint: string = '';
-  @State private llmProviderId: string = DEFAULT_MODEL_SELECTION.provider.providerId;
-  @State private llmPresetId: string = DEFAULT_MODEL_SELECTION.preset.presetId;
-  @State private availableModelPresetIds: string[] = DEFAULT_MODEL_SELECTION.provider.models.map(
-    (preset: BuiltinModelPreset): string => preset.presetId
-  );
-  @State private llmApiKey: string = '';
-  @State private showModelDialog: boolean = false;
-  @State private dialogProviderId: string = DEFAULT_MODEL_SELECTION.provider.providerId;
-  @State private dialogPresetId: string = DEFAULT_MODEL_SELECTION.preset.presetId;
-  @State private dialogAvailableModelPresetIds: string[] = DEFAULT_MODEL_SELECTION.provider.models.map(
-    (preset: BuiltinModelPreset): string => preset.presetId
-  );
-  @State private dialogApiKey: string = '';
-  @State private llmStyle: string = 'clean_conversational';
-  @State private defaultEntryMode: string = 'keyboard';
-  private readonly settingsStore: OffhandSettingsStore = new OffhandSettingsStore();
+  @State private microphonePermissionGranted: boolean = false;
   private readonly atManager = abilityAccessCtrl.createAtManager();
-  private readonly builtinProviders: BuiltinModelProvider[] = BUILTIN_MODEL_PROVIDERS;
-  private pendingSave: Promise<void> = Promise.resolve();
 
   aboutToAppear(): void {
-    void this.loadSettings();
-  }
-
-  aboutToDisappear(): void {
-    // Flush any pending auto-save plus the latest in-memory state before the
-    // page is torn down so back-navigation never drops the most recent edit
-    // (API key / provider / model).
-    this.commitSettingsChange();
+    void this.refreshMicrophonePermissionStatus();
   }
 
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Scroll() {
-        Column({ space: 20 }) {
-          this.renderHeader()
-          this.renderInputCard()
-          this.renderModelCard()
-          this.renderPermissionCard()
-        }
-        .width('100%')
-        .padding({ left: 20, right: 20, top: 18, bottom: 28 })
+    Scroll() {
+      Column({ space: 12 }) {
+        this.renderEntryCard()
+        this.renderPermissionCard()
       }
       .width('100%')
-      .height('100%')
-
-      if (this.showModelDialog) {
-        this.renderModelDialog()
-      }
+      .padding({ left: 20, right: 20, top: 20, bottom: 28 })
     }
     .width('100%')
     .height('100%')
@@ -106,732 +44,62 @@ struct Index {
   }
 
   @Builder
-  private renderHeader() {
-    Column({ space: 10 }) {
-      Row() {
-        this.renderBackIndicator()
-        Blank()
-        this.renderHeaderTitle()
-        Blank()
-        Column()
-          .width(44)
-          .height(44)
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      Row({ space: 8 }) {
-        Column()
-          .width(12)
-          .height(12)
-          .borderRadius(6)
-          .backgroundColor(this.resolveHeaderStatusColor())
-
-        Text(this.saveStatus)
-          .fontSize(14)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.resolveHeaderStatusColor())
-      }
-      .alignItems(VerticalAlign.Center)
-    }
-    .width('100%')
-    .padding({ top: 4, bottom: 2 })
-  }
-
-  @Builder
-  private renderBackIndicator() {
-    Row() {
-      Text('‹')
-        .fontSize(30)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(TEXT_PRIMARY)
-        .textAlign(TextAlign.Center)
-        .width('100%')
-    }
-    .width(44)
-    .height(44)
-    .borderRadius(22)
-    .backgroundColor('rgba(255,255,255,0.72)')
-  }
-
-  @Builder
-  private renderHeaderTitle() {
-    Column({ space: 0 }) {
-      Text('Offhand 输入法')
-        .fontSize(28)
+  private renderEntryCard() {
+    Column({ space: 12 }) {
+      Text('输入法内配置')
+        .fontSize(18)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT_PRIMARY)
-        .textAlign(TextAlign.Center)
-        .maxLines(1)
-    }
-    .layoutWeight(1)
-  }
+        .width('100%')
+        .textAlign(TextAlign.Start)
 
-  @Builder
-  private renderInputCard() {
-    Column({ space: 0 }) {
-      this.renderCardHeader('section-input', '输入设置')
-      this.renderToggleSettingRow('voice', '语音输入', this.enableVoice, (): void => {
-        this.enableVoice = !this.enableVoice;
-        this.commitSettingsChange();
-      })
-      this.renderToggleSettingRow('polish', '文本润色', this.enableCloudPolish, (): void => {
-        this.enableCloudPolish = !this.enableCloudPolish;
-        this.commitSettingsChange();
-      })
-      this.renderToggleSettingRow('magic', '语音后自动润色', this.autoPolishVoiceResult,
-        (): void => {
-          this.autoPolishVoiceResult = !this.autoPolishVoiceResult;
-          this.commitSettingsChange();
-        })
-      this.renderLaunchModeRow()
-    }
-    .width('100%')
-    .backgroundColor(CARD_BACKGROUND)
-    .borderRadius(26)
-    .border({ width: 1, color: CARD_BORDER })
-    .shadow(CARD_SHADOW)
-  }
-
-  @Builder
-  private renderModelCard() {
-    Column({ space: 0 }) {
-      this.renderCardHeader('section-model', '润色模型')
-
-      Column({ space: 14 }) {
-        if (this.isModelConfigured()) {
-          this.renderConfiguredModelRow()
-        } else {
-          this.renderAddModelButton()
-        }
-      }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 18, bottom: 20 })
-    }
-    .width('100%')
-    .backgroundColor(CARD_BACKGROUND)
-    .borderRadius(26)
-    .border({ width: 1, color: CARD_BORDER })
-    .shadow(CARD_SHADOW)
-  }
-
-  @Builder
-  private renderAddModelButton() {
-    Button() {
-      Row({ space: 10 }) {
-        Text('+')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-
-        Text('添加模型')
-          .fontSize(16)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#FFFFFF')
-      }
-      .alignItems(VerticalAlign.Center)
-    }
-    .width('100%')
-    .height(50)
-    .backgroundColor(PRIMARY_BLUE)
-    .borderRadius(18)
-    .onClick((): void => {
-      this.openModelDialog();
-    })
-  }
-
-  @Builder
-  private renderConfiguredModelRow() {
-    Row({ space: 12 }) {
-      Column({ space: 4 }) {
-        Text(this.resolveProviderName(this.llmProviderId))
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(TEXT_SECONDARY)
-          .textAlign(TextAlign.Start)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-
-        Text(this.resolvePresetName(this.llmPresetId))
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(TEXT_PRIMARY)
-          .textAlign(TextAlign.Start)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      this.renderMiniActionButton('编辑', PRIMARY_BLUE, '#FFFFFF', (): void => {
-        this.openModelDialog();
-      })
-
-      this.renderMiniActionButton('删除', SOFT_GRAY, ERROR_ORANGE, (): void => {
-        this.deleteConfiguredModel();
-      })
-    }
-    .width('100%')
-    .padding({ top: 4, bottom: 4 })
-    .alignItems(VerticalAlign.Center)
-  }
-
-  private isModelConfigured(): boolean {
-    return this.llmApiKey.trim().length > 0;
-  }
-
-  private deleteConfiguredModel(): void {
-    // Clearing the API key is the single source of truth for "is a model
-    // configured". Reset provider/model to the catalog default so the next
-    // "add" starts from a clean slate.
-    this.llmApiKey = '';
-    this.applyProviderSelection(
-      DEFAULT_MODEL_SELECTION.provider.providerId,
-      DEFAULT_MODEL_SELECTION.preset.presetId);
-    this.commitSettingsChange();
-  }
-
-  @Builder
-  private renderModelSummaryRow(title: string, value: string) {
-    Row({ space: 12 }) {
-      Text(title)
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
+      Text('在键盘左上角打开配置。')
+        .fontSize(14)
         .fontColor(TEXT_SECONDARY)
-        .width(72)
+        .width('100%')
         .textAlign(TextAlign.Start)
 
-      Text(value)
-        .layoutWeight(1)
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(TEXT_PRIMARY)
-        .textAlign(TextAlign.Start)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      this.renderStatusPill('键盘内配置', PRIMARY_BLUE)
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center)
-  }
-
-  @Builder
-  private renderModelDialog() {
-    Column() {
-      Blank()
-        .layoutWeight(1)
-        .width('100%')
-        .onClick((): void => {
-          this.closeModelDialog();
-        })
-
-      Row() {
-        Blank()
-          .layoutWeight(1)
-          .height('100%')
-          .onClick((): void => {
-            this.closeModelDialog();
-          })
-
-        Column({ space: 0 }) {
-          Row() {
-            Text(this.isModelConfigured() ? '编辑模型' : '添加模型')
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(TEXT_PRIMARY)
-              .layoutWeight(1)
-              .textAlign(TextAlign.Start)
-
-            Button('×')
-              .width(36)
-              .height(36)
-              .fontSize(24)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(TEXT_SECONDARY)
-              .backgroundColor(SOFT_GRAY)
-              .borderRadius(18)
-              .onClick((): void => {
-                this.closeModelDialog();
-              })
-          }
-          .width('100%')
-          .padding({ left: 22, right: 22, top: 20, bottom: 18 })
-          .alignItems(VerticalAlign.Center)
-
-          Column()
-            .width('100%')
-            .height(1)
-            .backgroundColor(DIVIDER_COLOR)
-
-          Column({ space: 20 }) {
-            // NOTE: previously these two sections were rendered through a
-            // shared @Builder renderChipSection(ids: string[], ...). ArkUI
-            // treats the array argument as a value copy inside the nested
-            // @Builder, so mutating `dialogAvailableModelPresetIds` via
-            // `applyDialogProviderSelection` did NOT rebuild the model
-            // chips — the list still showed the previous provider's presets.
-            // Inlining the ForEach here re-establishes the @State → UI
-            // dependency and fixes "switching provider keeps old models".
-            Column({ space: 12 }) {
-              Text('供应商')
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(TEXT_SECONDARY)
-                .width('100%')
-                .textAlign(TextAlign.Start)
-
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(this.builtinProviders.map(
-                  (provider: BuiltinModelProvider): string => provider.providerId),
-                  (providerId: string) => {
-                    this.renderChoiceChip(
-                      this.resolveProviderName(providerId),
-                      this.dialogProviderId === providerId,
-                      (): void => {
-                        this.applyDialogProviderSelection(providerId, '');
-                      })
-                  },
-                  (providerId: string): string => {
-                    return `${providerId}:${this.dialogProviderId === providerId ? '1' : '0'}`;
-                  })
-              }
-              .width('100%')
-            }
-            .width('100%')
-            .alignItems(HorizontalAlign.Start)
-
-            Column({ space: 12 }) {
-              Text('模型')
-                .fontSize(15)
-                .fontWeight(FontWeight.Medium)
-                .fontColor(TEXT_SECONDARY)
-                .width('100%')
-                .textAlign(TextAlign.Start)
-
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(this.dialogAvailableModelPresetIds,
-                  (presetId: string) => {
-                    this.renderChoiceChip(
-                      this.resolveDialogPresetName(presetId),
-                      this.dialogPresetId === presetId,
-                      (): void => {
-                        this.dialogPresetId = presetId;
-                      })
-                  },
-                  (presetId: string): string => {
-                    // Include provider id in the key so switching provider
-                    // invalidates every existing model chip even when the
-                    // new preset list happens to share an id prefix.
-                    return `${this.dialogProviderId}:${presetId}:${this.dialogPresetId === presetId ? '1' : '0'}`;
-                  })
-              }
-              .width('100%')
-            }
-            .width('100%')
-            .alignItems(HorizontalAlign.Start)
-
-            this.renderInputField('API Key', '输入 API Key', this.dialogApiKey, (value: string): void => {
-              this.dialogApiKey = value;
-            })
-
-            Button('完成并关闭')
-              .width('100%')
-              .height(50)
-              .fontSize(17)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#FFFFFF')
-              .backgroundColor(PRIMARY_BLUE)
-              .borderRadius(18)
-              .onClick((): void => {
-                this.closeModelDialog();
-              })
-          }
-          .width('100%')
-          .padding({ left: 22, right: 22, top: 20, bottom: 22 })
-        }
-        .width('86%')
-        .backgroundColor(DIALOG_BACKGROUND)
-        .borderRadius(28)
-        .shadow({
-          radius: 16,
-          color: '#260A2540',
-          offsetX: 0,
-          offsetY: 10
-        })
-
-        Blank()
-          .layoutWeight(1)
-          .height('100%')
-          .onClick((): void => {
-            this.closeModelDialog();
-          })
-      }
-      .width('100%')
-
-      Blank()
-        .layoutWeight(1)
-        .width('100%')
-        .onClick((): void => {
-          this.closeModelDialog();
-        })
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor(OVERLAY_MASK)
+    .alignItems(HorizontalAlign.Start)
+    .padding(18)
+    .backgroundColor(CARD_BACKGROUND)
+    .borderRadius(24)
+    .border({ width: 1, color: CARD_BORDER })
+    .shadow(CARD_SHADOW)
   }
 
   @Builder
   private renderPermissionCard() {
-    Column({ space: 0 }) {
-      this.renderCardHeader('permission', '权限')
-
-      Column({ space: 16 }) {
-        Row({ space: 12 }) {
-          this.renderStatusPill(this.resolvePermissionLabel(), this.resolvePermissionColor())
-          Blank()
-          this.renderMiniActionButton('授权麦克风', PRIMARY_BLUE, '#FFFFFF', (): void => {
-            void this.requestMicrophonePermission();
-          })
-        }
-        .width('100%')
-
-        Text(this.microphonePermissionStatus)
-          .fontSize(14)
-          .fontColor(TEXT_SECONDARY)
-          .width('100%')
-          .textAlign(TextAlign.Start)
-      }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 18, bottom: 20 })
-    }
-    .width('100%')
-    .backgroundColor(CARD_BACKGROUND)
-    .borderRadius(26)
-    .border({ width: 1, color: CARD_BORDER })
-    .shadow(CARD_SHADOW)
-  }
-
-  @Builder
-  private renderCardHeader(iconKind: string, title: string) {
-    Column({ space: 0 }) {
-      Row({ space: 14 }) {
-        this.renderIconBadge(iconKind)
-
-        Text(title)
-          .fontSize(19)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(TEXT_PRIMARY)
-          .textAlign(TextAlign.Start)
-      }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 18, bottom: 18 })
-      .alignItems(VerticalAlign.Center)
-
-      Column()
-        .width('100%')
-        .height(1)
-        .backgroundColor(DIVIDER_COLOR)
-    }
-    .width('100%')
-  }
-
-  @Builder
-  private renderIconBadge(iconKind: string) {
-    Row() {
-      this.renderNamedIcon(iconKind, 22, 22)
-    }
-    .width(42)
-    .height(42)
-    .borderRadius(21)
-    .backgroundColor(ICON_BADGE_BACKGROUND)
-    .justifyContent(FlexAlign.Center)
-  }
-
-  @Builder
-  private renderToggleSettingRow(iconKind: string, title: string, enabled: boolean, action: () => void) {
-    Column({ space: 0 }) {
-      Row({ space: 14 }) {
-        this.renderInlineIcon(iconKind)
-
-        Text(title)
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(TEXT_PRIMARY)
-          .layoutWeight(1)
-          .textAlign(TextAlign.Start)
-
-        this.renderSwitch(enabled, action)
-      }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 18, bottom: 18 })
-      .alignItems(VerticalAlign.Center)
-
-      Column()
-        .width('100%')
-        .height(1)
-        .margin({ left: 18, right: 18 })
-      .backgroundColor(DIVIDER_COLOR)
-    }
-    .width('100%')
-  }
-
-  @Builder
-  private renderLaunchModeRow() {
-    Row({ space: 14 }) {
-      this.renderInlineIcon('launch')
-
-      Text('默认启动')
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
+    Column({ space: 14 }) {
+      Text('麦克风')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
         .fontColor(TEXT_PRIMARY)
-        .layoutWeight(1)
-        .textAlign(TextAlign.Start)
-
-      this.renderSegmentedControl()
-    }
-    .width('100%')
-    .padding({ left: 18, right: 18, top: 18, bottom: 18 })
-    .alignItems(VerticalAlign.Center)
-  }
-
-  @Builder
-  private renderInlineIcon(iconKind: string) {
-    Row() {
-      this.renderNamedIcon(iconKind, 22, 22)
-    }
-    .width(36)
-    .height(36)
-    .justifyContent(FlexAlign.Center)
-  }
-
-  @Builder
-  private renderNamedIcon(iconKind: string, width: number, height: number) {
-    if (iconKind === 'section-input') {
-      Image($r('app.media.ime_icon_feature_mic'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else if (iconKind === 'voice') {
-      Image($r('app.media.ime_icon_key_voicepad'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else if (iconKind === 'polish') {
-      Image($r('app.media.ime_icon_feature_style'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else if (iconKind === 'magic') {
-      Image($r('app.media.ime_icon_bottom_magic'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else if (iconKind === 'launch') {
-      Image($r('app.media.ime_icon_settings_gear'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else if (iconKind === 'section-model') {
-      Image($r('app.media.ime_icon_feature_tool'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else if (iconKind === 'permission') {
-      Image($r('app.media.ime_icon_settings_sound'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else if (iconKind === 'field') {
-      Image($r('app.media.ime_icon_settings_edit'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    } else {
-      Image($r('app.media.ime_icon_settings_gear'))
-        .width(width)
-        .height(height)
-        .objectFit(ImageFit.Contain)
-    }
-  }
-
-  @Builder
-  private renderSwitch(enabled: boolean, action: () => void) {
-    Button() {
-      Row() {
-        Column()
-          .width(36)
-          .height(36)
-          .borderRadius(18)
-          .backgroundColor('#FFFFFF')
-          .shadow({
-            radius: 4,
-            color: '#18000000',
-            offsetX: 0,
-            offsetY: 2
-          })
-      }
-      .width(84)
-      .height(46)
-      .padding({ left: 5, right: 5, top: 0, bottom: 0 })
-      .justifyContent(enabled ? FlexAlign.End : FlexAlign.Start)
-      .alignItems(VerticalAlign.Center)
-      .backgroundColor(enabled ? PRIMARY_BLUE : '#D9E3F1')
-      .borderRadius(23)
-    }
-    .width(84)
-    .height(46)
-    .backgroundColor('rgba(0,0,0,0)')
-    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
-    .onClick((): void => {
-      action();
-    })
-  }
-
-  @Builder
-  private renderSegmentedControl() {
-    Row({ space: 0 }) {
-      this.renderSegmentOption('keyboard', '键盘')
-      this.renderSegmentOption('voice', '语音')
-    }
-    .height(50)
-    .padding({ left: 4, right: 4, top: 4, bottom: 4 })
-    .backgroundColor(SOFT_GRAY)
-    .borderRadius(18)
-  }
-
-  @Builder
-  private renderSegmentOption(value: string, label: string) {
-    Button(label)
-      .width(104)
-      .height(42)
-      .fontSize(16)
-      .fontWeight(this.defaultEntryMode === value ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(this.defaultEntryMode === value ? '#FFFFFF' : TEXT_SECONDARY)
-      .backgroundColor(this.defaultEntryMode === value ? PRIMARY_BLUE : 'rgba(0,0,0,0)')
-      .borderRadius(14)
-      .onClick((): void => {
-        this.defaultEntryMode = value;
-        this.commitSettingsChange();
-      })
-  }
-
-  @Builder
-  private renderChipSection(
-    title: string,
-    ids: string[],
-    resolveLabel: (id: string) => string,
-    isSelected: (id: string) => boolean,
-    onSelect: (id: string) => void
-  ) {
-    Column({ space: 12 }) {
-      Text(title)
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(TEXT_SECONDARY)
-        .width('100%')
-        .textAlign(TextAlign.Start)
-
-      Flex({ wrap: FlexWrap.Wrap }) {
-        ForEach(ids, (id: string) => {
-          this.renderChoiceChip(resolveLabel(id), isSelected(id), (): void => {
-            onSelect(id);
-          })
-        }, (id: string): string => {
-          // ArkUI ForEach only re-renders chips when the key changes. If the
-          // key were just `id`, switching selection between two items in the
-          // same list wouldn't rebuild either chip (ids don't move) and the
-          // selected/unselected styling would look frozen — which is exactly
-          // the "can't pick another provider/model" symptom reported.
-          // Including selection state in the key forces both the old and
-          // new chip to rebuild on every pick.
-          return `${id}:${isSelected(id) ? '1' : '0'}`;
-        })
-      }
-      .width('100%')
-    }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
-  }
-
-  @Builder
-  private renderChoiceChip(label: string, selected: boolean, onClick: () => void) {
-    Button(label)
-      .type(ButtonType.Capsule)
-      .height(48)
-      .fontSize(16)
-      .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(selected ? '#FFFFFF' : TEXT_PRIMARY)
-      .backgroundColor(selected ? PRIMARY_BLUE : SOFT_GRAY)
-      .borderRadius(24)
-      .padding({ left: 22, right: 22 })
-      .margin({ right: 12, bottom: 12 })
-      .onClick((): void => {
-        onClick();
-      })
-  }
-
-  @Builder
-  private renderInputField(
-    title: string,
-    placeholder: string,
-    value: string,
-    onChange: (value: string) => void,
-    onCommit?: () => void
-  ) {
-    Column({ space: 12 }) {
-      Text(title)
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(TEXT_SECONDARY)
         .width('100%')
         .textAlign(TextAlign.Start)
 
       Row({ space: 12 }) {
-        this.renderInlineIcon('field')
+        this.renderStatusPill(this.resolvePermissionLabel(), this.resolvePermissionColor())
 
-        TextInput({ text: value, placeholder: placeholder })
-          .layoutWeight(1)
-          .height(52)
-          .fontSize(16)
-          .backgroundColor('rgba(0,0,0,0)')
-          .placeholderColor(TEXT_MUTED)
-          .onChange((nextValue: string): void => {
-            onChange(nextValue);
+        if (this.shouldShowMicrophonePermissionButton()) {
+          Blank()
+          this.renderActionButton('授权', (): void => {
+            void this.requestMicrophonePermission();
           })
-          .onBlur((): void => {
-            if (onCommit) {
-              onCommit();
-            }
-          })
-          .onSubmit((): void => {
-            if (onCommit) {
-              onCommit();
-            }
-          })
-
-        if (onCommit) {
-          Button('保存')
-            .height(36)
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#FFFFFF')
-            .backgroundColor(PRIMARY_BLUE)
-            .borderRadius(12)
-            .padding({ left: 14, right: 14 })
-            .onClick((): void => {
-              onCommit();
-            })
         }
       }
       .width('100%')
-      .height(56)
-      .padding({ left: 14, right: 14, top: 0, bottom: 0 })
-      .backgroundColor('#F7FAFD')
-      .border({ width: 1, color: '#DCE5F0' })
-      .borderRadius(18)
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding(18)
+    .backgroundColor(CARD_BACKGROUND)
+    .borderRadius(24)
+    .border({ width: 1, color: CARD_BORDER })
+    .shadow(CARD_SHADOW)
   }
 
   @Builder
@@ -855,13 +123,13 @@ struct Index {
   }
 
   @Builder
-  private renderMiniActionButton(label: string, backgroundColor: string, fontColor: string, action: () => void) {
+  private renderActionButton(label: string, action: () => void) {
     Button(label)
-      .height(42)
+      .height(40)
       .fontSize(14)
       .fontWeight(FontWeight.Medium)
-      .fontColor(fontColor)
-      .backgroundColor(backgroundColor)
+      .fontColor('#FFFFFF')
+      .backgroundColor(PRIMARY_BLUE)
       .borderRadius(16)
       .padding({ left: 16, right: 16 })
       .onClick((): void => {
@@ -869,222 +137,40 @@ struct Index {
       })
   }
 
-  private resolveHeaderStatusColor(): string {
-    if (this.loaded) {
-      return SUCCESS_GREEN;
-    }
-    if (this.saveStatus.indexOf('无法') >= 0) {
-      return ERROR_ORANGE;
-    }
-    return SUCCESS_GREEN;
-  }
-
   private resolvePermissionLabel(): string {
-    if (this.microphonePermissionStatus.indexOf('已授权') >= 0) {
-      return '麦克风已授权';
+    if (this.microphonePermissionGranted) {
+      return '已授权';
     }
-    if (this.microphonePermissionStatus.indexOf('请求中') >= 0 || this.microphonePermissionStatus.indexOf('检查中') >= 0) {
-      return '麦克风检查中';
+    if (this.microphonePermissionStatus === '请求中' || this.microphonePermissionStatus === '检查中') {
+      return '检查中';
     }
-    return '麦克风未授权';
+    if (this.microphonePermissionStatus === '请求失败') {
+      return '请求失败';
+    }
+    return '未授权';
   }
 
   private resolvePermissionColor(): string {
-    return this.microphonePermissionStatus.indexOf('已授权') >= 0 ? SUCCESS_GREEN : ERROR_ORANGE;
-  }
-
-  private resolveProviderName(providerId: string): string {
-    for (let index = 0; index < this.builtinProviders.length; index++) {
-      let provider = this.builtinProviders[index];
-      if (provider.providerId === providerId) {
-        return provider.providerName;
-      }
+    if (this.microphonePermissionGranted) {
+      return SUCCESS_GREEN;
     }
-    return providerId;
-  }
-
-  private resolvePresetName(presetId: string): string {
-    let provider = this.getSelectedProvider();
-    for (let index = 0; index < provider.models.length; index++) {
-      let preset = provider.models[index];
-      if (preset.presetId === presetId) {
-        return preset.displayName;
-      }
+    if (this.microphonePermissionStatus === '请求中' || this.microphonePermissionStatus === '检查中') {
+      return TEXT_SECONDARY;
     }
-    return presetId;
+    return ERROR_ORANGE;
   }
 
-  private resolveProviderById(providerId: string): BuiltinModelProvider {
-    for (let index = 0; index < this.builtinProviders.length; index++) {
-      let provider = this.builtinProviders[index];
-      if (provider.providerId === providerId) {
-        return provider;
-      }
+  private shouldShowMicrophonePermissionButton(): boolean {
+    if (this.microphonePermissionGranted) {
+      return false;
     }
-    return this.builtinProviders[0];
-  }
-
-  private getSelectedProvider(): BuiltinModelProvider {
-    return this.resolveProviderById(this.llmProviderId);
-  }
-
-  private selectProvider(provider: BuiltinModelProvider): void {
-    this.applyProviderSelection(provider.providerId, '');
-  }
-
-  private resolveDialogPresetName(presetId: string): string {
-    let provider = this.resolveProviderById(this.dialogProviderId);
-    for (let index = 0; index < provider.models.length; index++) {
-      let preset = provider.models[index];
-      if (preset.presetId === presetId) {
-        return preset.displayName;
-      }
-    }
-    return presetId;
-  }
-
-  private applyProviderSelection(providerId: string, preferredPresetId: string): void {
-    let resolvedProvider = this.resolveProviderById(providerId);
-    let presetIds = this.listModelPresetIds(resolvedProvider);
-    let resolvedPresetId = presetIds.length > 0 ? presetIds[0] : '';
-    if (preferredPresetId.length > 0 && presetIds.indexOf(preferredPresetId) >= 0) {
-      resolvedPresetId = preferredPresetId;
-    }
-    this.llmProviderId = resolvedProvider.providerId;
-    this.availableModelPresetIds = presetIds.slice();
-    this.llmPresetId = resolvedPresetId;
-  }
-
-  private applyDialogProviderSelection(providerId: string, preferredPresetId: string): void {
-    let resolvedProvider = this.resolveProviderById(providerId);
-    let presetIds = this.listModelPresetIds(resolvedProvider);
-    let resolvedPresetId = presetIds.length > 0 ? presetIds[0] : '';
-    if (preferredPresetId.length > 0 && presetIds.indexOf(preferredPresetId) >= 0) {
-      resolvedPresetId = preferredPresetId;
-    }
-    this.dialogProviderId = resolvedProvider.providerId;
-    this.dialogAvailableModelPresetIds = presetIds.slice();
-    this.dialogPresetId = resolvedPresetId;
-  }
-
-  private listModelPresetIds(provider: BuiltinModelProvider): string[] {
-    let presetIds: string[] = [];
-    for (let index = 0; index < provider.models.length; index++) {
-      presetIds.push(provider.models[index].presetId);
-    }
-    return presetIds;
-  }
-
-  private openModelDialog(): void {
-    this.dialogApiKey = this.llmApiKey;
-    this.applyDialogProviderSelection(this.llmProviderId, this.llmPresetId);
-    this.showModelDialog = true;
-  }
-
-  private closeModelDialog(): void {
-    this.llmApiKey = this.dialogApiKey;
-    this.applyProviderSelection(this.dialogProviderId, this.dialogPresetId);
-    this.showModelDialog = false;
-    this.commitSettingsChange();
-  }
-
-  private async loadSettings(): Promise<void> {
-    let hostContext = this.resolveHostContext();
-    if (!hostContext) {
-      this.loaded = false;
-      this.saveStatus = '无法读取配置';
-      this.microphonePermissionStatus = '不可用';
-      return;
-    }
-    let settings = await this.settingsStore.load(hostContext);
-    this.applySettings(settings);
-    this.loaded = true;
-    this.saveStatus = '已加载';
-    await this.refreshMicrophonePermissionStatus(hostContext);
-  }
-
-  private async saveSettings(): Promise<void> {
-    let hostContext = this.resolveHostContext();
-    if (!hostContext) {
-      this.loaded = false;
-      this.saveStatus = '无法保存';
-      hilog.warn(SETTINGS_LOG_DOMAIN, SETTINGS_LOG_TAG,
-        'saveSettings aborted: host context unavailable');
-      return;
-    }
-    let snapshot = this.buildSettings();
-    try {
-      await this.settingsStore.save(hostContext, snapshot);
-      this.loaded = true;
-      this.saveStatus = '已保存';
-      hilog.info(SETTINGS_LOG_DOMAIN, SETTINGS_LOG_TAG,
-        'saved: provider=%{public}s preset=%{public}s apiKeyLen=%{public}d',
-        snapshot.llmProviderId, snapshot.llmPresetId, snapshot.llmApiKey.length);
-    } catch (error) {
-      this.saveStatus = '保存失败';
-      hilog.error(SETTINGS_LOG_DOMAIN, SETTINGS_LOG_TAG,
-        'saveSettings failed: %{public}s', (error as Error).message ?? String(error));
-    }
-  }
-
-  // Fire-and-forget wrapper used by in-card controls so every tweak is
-  // persisted immediately. Serializes through `pendingSave` so rapid
-  // consecutive changes (dropdown click → auto-save, then another click)
-  // don't race each other at the preferences layer and drop writes.
-  private commitSettingsChange(): void {
-    let runner = (): Promise<void> => {
-      return this.saveSettings();
-    };
-    this.pendingSave = this.pendingSave.then(runner, runner);
-  }
-
-  private applySettings(settings: OffhandRuntimeSettings): void {
-    let next = cloneRuntimeSettings(settings);
-    this.enablePreviewText = next.enablePreviewText;
-    this.enableVoice = next.enableVoice;
-    this.enableCloudPolish = next.enableCloudPolish;
-    this.enablePersonalization = next.enablePersonalization;
-    this.autoInsertVoiceResult = next.autoInsertVoiceResult;
-    this.autoPolishVoiceResult = next.autoPolishVoiceResult;
-    this.asrEndpoint = next.asrEndpoint;
-    this.applyProviderSelection(next.llmProviderId, next.llmPresetId);
-    this.llmApiKey = next.llmApiKey;
-    this.llmStyle = next.llmStyle;
-    this.defaultEntryMode = next.defaultEntryMode === 'voice' ? 'voice' : 'keyboard';
-  }
-
-  private buildSettings(): OffhandRuntimeSettings {
-    let selection = resolveBuiltinModelSelection(this.llmProviderId, this.llmPresetId);
-    return {
-      enablePreviewText: this.enablePreviewText,
-      enableVoice: this.enableVoice,
-      enableCloudPolish: this.enableCloudPolish,
-      enablePersonalization: this.enablePersonalization,
-      autoInsertVoiceResult: this.autoInsertVoiceResult,
-      autoPolishVoiceResult: this.autoPolishVoiceResult,
-      asrEndpoint: this.asrEndpoint.trim(),
-      llmProviderId: selection.provider.providerId,
-      llmPresetId: selection.preset.presetId,
-      llmApiKey: this.llmApiKey.trim(),
-      llmStyle: this.llmStyle.trim().length > 0 ? this.llmStyle.trim() : createDefaultRuntimeSettings().llmStyle,
-      defaultEntryMode: this.defaultEntryMode === 'voice' ? 'voice' : 'keyboard'
-    };
-  }
-
-  private resolveMaskedApiKey(apiKey: string): string {
-    let normalized = apiKey.trim();
-    if (normalized.length === 0) {
-      return '未配置';
-    }
-    if (normalized.length <= 8) {
-      return `${normalized.substring(0, 2)}****`;
-    }
-    return `${normalized.substring(0, 4)}****${normalized.substring(normalized.length - 4)}`;
+    return this.microphonePermissionStatus === '未授权' || this.microphonePermissionStatus === '请求失败';
   }
 
   private async requestMicrophonePermission(): Promise<void> {
     let hostContext = this.resolveHostContext() as common.UIAbilityContext | undefined;
     if (!hostContext) {
+      this.microphonePermissionGranted = false;
       this.microphonePermissionStatus = '不可用';
       return;
     }
@@ -1094,16 +180,19 @@ struct Index {
       let granted = result.authResults.some((value: number): boolean => {
         return value === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
       });
+      this.microphonePermissionGranted = granted;
       this.microphonePermissionStatus = granted ? '已授权' : '未授权';
     } catch (_) {
+      this.microphonePermissionGranted = false;
       this.microphonePermissionStatus = '请求失败';
     }
     await this.refreshMicrophonePermissionStatus(hostContext);
   }
 
   private async refreshMicrophonePermissionStatus(context?: common.Context): Promise<void> {
-    let hostContext = context ?? this.resolveHostContext();
+    let hostContext = (context ?? this.resolveHostContext()) as common.UIAbilityContext | undefined;
     if (!hostContext) {
+      this.microphonePermissionGranted = false;
       this.microphonePermissionStatus = '不可用';
       return;
     }
@@ -1112,11 +201,11 @@ struct Index {
         hostContext.applicationInfo.accessTokenId,
         MICROPHONE_PERMISSION
       );
-      this.microphonePermissionStatus = grantStatus === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED ?
-        '已授权' :
-        '未授权';
+      this.microphonePermissionGranted = grantStatus === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+      this.microphonePermissionStatus = this.microphonePermissionGranted ? '已授权' : '未授权';
     } catch (_) {
-      this.microphonePermissionStatus = '不可用';
+      this.microphonePermissionGranted = false;
+      this.microphonePermissionStatus = '未授权';
     }
   }
 
