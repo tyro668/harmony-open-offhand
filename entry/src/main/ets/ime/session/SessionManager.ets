@@ -324,6 +324,7 @@ export class SessionManager {
       await this.editorAdapter.clearPreviewText();
       await this.refreshSessionContext('subtypeSwitch');
     }
+    void this.rememberDefaultEntryMode();
   }
 
   async switchKeyboardLayout(layout: KeyboardLayoutId): Promise<void> {
@@ -344,6 +345,7 @@ export class SessionManager {
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       statusText: `Switched to ${this.describeKeyboardLayout(resolvedLayout)}`
     });
+    void this.rememberDefaultEntryMode();
     if (!this.isNineKeyLayoutActive()) {
       this.syncNineKeyState(this.nineKeyEngine.reset());
       return;
@@ -358,6 +360,27 @@ export class SessionManager {
     this.syncNineKeyState(this.nineKeyEngine.syncWithRawInput(state.rawInput));
     this.updateCandidateState(state);
     await this.syncPreviewText(state.composingText);
+  }
+
+  // Persist the last user-selected entry mode so the next time the keyboard
+  // attaches to an editor it restores voice/keyboard exactly as the user left
+  // it. Only the defaultEntryMode field is touched to avoid side effects from
+  // updateRuntimeSettings (which stops voice capture, etc.).
+  private async rememberDefaultEntryMode(): Promise<void> {
+    if (!this.context) {
+      return;
+    }
+    let mode: string = this.currentKeyboardLayout === 'voice_panel' ? 'voice' : 'keyboard';
+    let current = this.configRepository.getRuntimeSettings();
+    if (current.defaultEntryMode === mode) {
+      return;
+    }
+    current.defaultEntryMode = mode;
+    try {
+      await this.configRepository.saveRuntimeSettings(this.context, current);
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'rememberDefaultEntryMode failed: %{public}s', String(error));
+    }
   }
 
   async typeNineKeyDigit(digit: string): Promise<void> {
@@ -876,8 +899,11 @@ export class SessionManager {
             streamedPolish = true;
             statusSource = polishResult.provider;
             this.trackCommittedText(displayedText);
+            // Polished text is now in the host editor — remove the preview
+            // copy from the voice panel so the same string isn't shown in
+            // two places at once.
             keyboardStateStore.patch({
-              voiceTranscriptPreview: displayedText
+              voiceTranscriptPreview: ''
             });
           }
         } catch (error) {
@@ -904,8 +930,10 @@ export class SessionManager {
               if (ok) {
                 this.trackCommittedText(displayedText);
                 statusSource = polishResult.provider;
+                // Polished text is now in the host editor — remove the
+                // preview from the voice panel.
                 keyboardStateStore.patch({
-                  voiceTranscriptPreview: displayedText
+                  voiceTranscriptPreview: ''
                 });
               } else {
                 hilog.warn(DOMAIN, TAG, 'voice polish: commit of non-streaming result failed');

@@ -15,20 +15,28 @@ const BUILTIN_MODEL_CATALOG: BuiltinModelCatalog = {
   ],
   providers: [
     {
-      providerId: 'kimi',
-      providerName: '月之暗面',
+      providerId: 'moonshot',
+      providerName: 'Moonshot',
       models: [
         {
           presetId: 'kimi-default',
-          displayName: 'Kimi',
+          displayName: 'Kimi K2.5',
           apiModel: 'kimi-k2.5',
           protocol: 'openai-compatible',
           endpoint: 'https://api.moonshot.cn/v1',
           enabled: true
         },
         {
+          presetId: 'kimi-k2.6',
+          displayName: 'Kimi K2.6',
+          apiModel: 'kimi-k2.6',
+          protocol: 'openai-compatible',
+          endpoint: 'https://api.moonshot.cn/v1',
+          enabled: true
+        },
+        {
           presetId: 'kimi-code-default',
-          displayName: 'Kimi-Code',
+          displayName: 'Kimi for Coding',
           apiModel: 'kimi-for-coding',
           protocol: 'anthropic-compatible',
           endpoint: 'https://api.kimi.com/coding/v1',
@@ -38,30 +46,44 @@ const BUILTIN_MODEL_CATALOG: BuiltinModelCatalog = {
     },
     {
       providerId: 'z-ai',
-      providerName: '智谱',
+      providerName: 'Z.AI',
       models: [
         {
-          presetId: 'z-ai-glm-4-plus',
-          displayName: 'GLM-4-Plus',
-          apiModel: 'glm-4-plus',
+          presetId: 'z-ai-glm-5',
+          displayName: 'GLM-5',
+          apiModel: 'glm-5',
           protocol: 'openai-compatible',
           endpoint: 'https://open.bigmodel.cn/api/paas/v4',
           enabled: true
         },
         {
-          presetId: 'z-ai-glm-4-flash',
-          displayName: 'GLM-4-Flash',
-          apiModel: 'glm-4-flash',
+          presetId: 'z-ai-glm-5.1',
+          displayName: 'GLM-5.1',
+          apiModel: 'glm-5.1',
           protocol: 'openai-compatible',
           endpoint: 'https://open.bigmodel.cn/api/paas/v4',
           enabled: true
+        }
+      ]
+    },
+    {
+      providerId: 'deepseek',
+      providerName: 'DeepSeek',
+      models: [
+        {
+          presetId: 'deepseek-v4-flash',
+          displayName: 'DeepSeek V4 Flash',
+          apiModel: 'deepseek-v4-flash',
+          protocol: 'openai-compatible',
+          endpoint: 'https://api.deepseek.com',
+          enabled: true
         },
         {
-          presetId: 'z-ai-glm-4-5',
-          displayName: 'GLM-4.5',
-          apiModel: 'glm-4.5',
+          presetId: 'deepseek-v4-pro',
+          displayName: 'DeepSeek V4 Pro',
+          apiModel: 'deepseek-v4-pro',
           protocol: 'openai-compatible',
-          endpoint: 'https://open.bigmodel.cn/api/paas/v4',
+          endpoint: 'https://api.deepseek.com',
           enabled: true
         }
       ]

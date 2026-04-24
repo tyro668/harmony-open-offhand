@@ -117,14 +117,10 @@ struct KeyboardPanel {
   @State private llmDialogApiKey: string = '';
   // Toggles masking on the API Key input; matches the eye icon in the mockup.
   @State private llmApiKeyRevealed: boolean = false;
-  // When true, the `当前模型` row expands into an inline list of the current
-  // provider's models; tapping a model collapses it again.
-  @State private llmModelDropdownOpen: boolean = false;
   @State private llmSaveStatus: string = '';
   @State private runtimeEnableVoice: boolean = true;
   @State private runtimeEnableCloudPolish: boolean = true;
   @State private runtimeAutoPolishVoiceResult: boolean = true;
-  @State private runtimeDefaultEntryMode: string = 'keyboard';
   @State private runtimeSaveStatus: string = '';
   private voicePulseTimer?: number;
   private unsubscribe?: () => void;
@@ -493,39 +489,53 @@ struct KeyboardPanel {
 
   @Builder
   private renderCommonSettingsGrid() {
-    Column({ space: 12 }) {
-      this.renderRuntimeToggleCard(
-        '语音输入',
-        this.runtimeEnableVoice,
-        (): void => {
-          this.runtimeEnableVoice = !this.runtimeEnableVoice;
-          this.persistRuntimeSettings(this.runtimeEnableVoice ? '已开启语音输入' : '已关闭语音输入');
-        }
-      )
-      this.renderRuntimeToggleCard(
-        '文本润色',
-        this.runtimeEnableCloudPolish,
-        (): void => {
-          this.runtimeEnableCloudPolish = !this.runtimeEnableCloudPolish;
-          this.persistRuntimeSettings(this.runtimeEnableCloudPolish ? '已开启文本润色' : '已关闭文本润色');
-        }
-      )
-      this.renderRuntimeToggleCard(
-        '语音后自动润色',
-        this.runtimeAutoPolishVoiceResult,
-        (): void => {
-          this.runtimeAutoPolishVoiceResult = !this.runtimeAutoPolishVoiceResult;
-          this.persistRuntimeSettings(this.runtimeAutoPolishVoiceResult ? '已开启自动润色' : '已关闭自动润色');
-        },
-        this.runtimeEnableVoice && this.runtimeEnableCloudPolish
-      )
-      this.renderDefaultEntryModeCard()
+    Column({ space: 8 }) {
+      // All runtime toggles live in a single card so the tab reads as one
+      // coherent settings block rather than three stacked chips.
+      Column() {
+        this.renderRuntimeToggleRow(
+          '语音输入',
+          this.runtimeEnableVoice,
+          (next: boolean): void => {
+            this.runtimeEnableVoice = next;
+            this.persistRuntimeSettings(next ? '已开启语音输入' : '已关闭语音输入');
+          },
+          true,
+          false
+        )
+        this.renderRuntimeToggleRow(
+          '文本润色',
+          this.runtimeEnableCloudPolish,
+          (next: boolean): void => {
+            this.runtimeEnableCloudPolish = next;
+            this.persistRuntimeSettings(next ? '已开启文本润色' : '已关闭文本润色');
+          },
+          true,
+          true
+        )
+        this.renderRuntimeToggleRow(
+          '语音后自动润色',
+          this.runtimeAutoPolishVoiceResult,
+          (next: boolean): void => {
+            this.runtimeAutoPolishVoiceResult = next;
+            this.persistRuntimeSettings(next ? '已开启自动润色' : '已关闭自动润色');
+          },
+          this.runtimeEnableVoice && this.runtimeEnableCloudPolish,
+          true
+        )
+      }
+      .width('100%')
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#F0F2F6' })
+      .borderRadius(18)
+      .shadow(this.resolveWhiteKeyShadow())
 
       if (this.runtimeSaveStatus.length > 0) {
         Text(this.runtimeSaveStatus)
           .fontSize(12)
           .fontColor('#3478F6')
           .width('100%')
+          .padding({ left: 4 })
       }
     }
     .width('100%')
@@ -533,77 +543,38 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderRuntimeToggleCard(title: string, enabled: boolean, action: () => void, active: boolean = true) {
-    Row({ space: 12 }) {
-      Text(title)
-        .layoutWeight(1)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(active ? '#17181B' : '#8A8E97')
-        .textAlign(TextAlign.Start)
+  private renderRuntimeToggleRow(title: string, enabled: boolean, action: (next: boolean) => void, active: boolean, showDivider: boolean) {
+    Column() {
+      if (showDivider) {
+        Divider()
+          .strokeWidth(1)
+          .color('#F0F2F6')
+          .width('100%')
+      }
+      Row({ space: 12 }) {
+        Text(title)
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(active ? '#17181B' : '#8A8E97')
+          .textAlign(TextAlign.Start)
 
-      Button(active ? (enabled ? '已开' : '已关') : '不可用')
-        .height(34)
-        .fontSize(12)
-        .fontColor(enabled && active ? '#FFFFFF' : '#4D5058')
-        .backgroundColor(active ? (enabled ? '#3478F6' : '#E8EBF0') : '#F3F4F6')
-        .borderRadius(17)
-        .padding({ left: 14, right: 14, top: 0, bottom: 0 })
-        .enabled(active)
-        .onClick(() => {
-          action();
-        })
-    }
-    .width('100%')
-    .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-    .alignItems(VerticalAlign.Center)
-    .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#F0F2F6' })
-    .borderRadius(18)
-    .shadow(this.resolveWhiteKeyShadow())
-  }
-
-  @Builder
-  private renderDefaultEntryModeCard() {
-    Column({ space: 12 }) {
-      Text('默认启动')
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#17181B')
-        .width('100%')
-        .textAlign(TextAlign.Start)
-
-      Row({ space: 10 }) {
-        this.renderRuntimeModeOption('keyboard', '键盘')
-        this.renderRuntimeModeOption('voice', '语音')
+        Toggle({ type: ToggleType.Switch, isOn: enabled })
+          .selectedColor('#3478F6')
+          .switchPointColor('#FFFFFF')
+          .enabled(active)
+          .onChange((isOn: boolean) => {
+            if (isOn === enabled) {
+              return;
+            }
+            action(isOn);
+          })
       }
       .width('100%')
+      .padding({ left: 16, right: 16, top: 14, bottom: 14 })
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
-    .padding({ left: 16, right: 16, top: 16, bottom: 16 })
-    .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#F0F2F6' })
-    .borderRadius(18)
-    .shadow(this.resolveWhiteKeyShadow())
-  }
-
-  @Builder
-  private renderRuntimeModeOption(value: string, label: string) {
-    Button(label)
-      .layoutWeight(1)
-      .height(38)
-      .fontSize(13)
-      .fontWeight(this.runtimeDefaultEntryMode === value ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(this.runtimeDefaultEntryMode === value ? '#FFFFFF' : '#4D5058')
-      .backgroundColor(this.runtimeDefaultEntryMode === value ? '#3478F6' : '#E8EBF0')
-      .borderRadius(19)
-      .onClick(() => {
-        if (this.runtimeDefaultEntryMode === value) {
-          return;
-        }
-        this.runtimeDefaultEntryMode = value;
-        this.persistRuntimeSettings(value === 'voice' ? '默认启动已设为语音' : '默认启动已设为键盘');
-      })
   }
 
   @Builder
@@ -655,9 +626,7 @@ struct KeyboardPanel {
   private renderLlmSettingsGrid() {
     Scroll() {
       Column({ space: 12 }) {
-        this.renderLlmProviderCard()
-        this.renderLlmModelCard()
-        this.renderLlmApiKeyCard()
+        this.renderLlmCombinedCard()
 
         if (this.llmSaveStatus.length > 0) {
           Text(this.llmSaveStatus)
@@ -706,30 +675,26 @@ struct KeyboardPanel {
     .edgeEffect(EdgeEffect.Spring)
   }
 
+  // All three LLM selectors (provider / model / API key) live in a single
+  // card. Each row is a labelled control stacked vertically and separated by
+  // a thin divider, so the tab reads as one settings block rather than three
+  // stacked chips.
   @Builder
-  private renderLlmProviderCard() {
-    Column({ space: 10 }) {
-      Text('模型提供商')
-        .fontSize(13)
-        .fontColor('#17181B')
-        .fontWeight(FontWeight.Medium)
+  private renderLlmCombinedCard() {
+    Column() {
+      this.renderLlmProviderRow()
+      Divider()
+        .strokeWidth(1)
+        .color('#F0F2F6')
         .width('100%')
-
-      Scroll() {
-        Row({ space: 10 }) {
-          ForEach(listBuiltinModelProviders(), (provider: BuiltinModelProvider) => {
-            this.renderLlmProviderTile(provider)
-          }, (provider: BuiltinModelProvider): string =>
-            `${provider.providerId}:${provider.providerId === this.llmDialogProviderId ? 1 : 0}`)
-        }
-        .padding({ right: 4 })
-      }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%')
+      this.renderLlmModelRow()
+      Divider()
+        .strokeWidth(1)
+        .color('#F0F2F6')
+        .width('100%')
+      this.renderLlmApiKeyRow()
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
     .backgroundColor('#FFFFFF')
     .borderRadius(14)
     .border({ width: 1, color: '#E4E6EA' })
@@ -737,55 +702,53 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderLlmProviderTile(provider: BuiltinModelProvider) {
-    // Selected tile uses a subtle blue tint + solid blue border/text to match
-    // the mockup, while idle tiles stay neutral for scanability.
-    Row({ space: 8 }) {
-      // Placeholder avatar: colored initial circle. Kept deterministic per
-      // providerId so rebuilds after state changes keep the same color.
-      Column() {
-        Text(this.resolveProviderInitial(provider.providerName))
-          .fontSize(14)
-          .fontColor('#FFFFFF')
-          .fontWeight(FontWeight.Medium)
-      }
-      .width(26)
-      .height(26)
-      .borderRadius(13)
-      .backgroundColor(this.resolveProviderAvatarColor(provider.providerId))
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
+  private renderLlmProviderRow() {
+    Column({ space: 10 }) {
+      Text('模型提供商')
+        .fontSize(13)
+        .fontColor('#17181B')
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
 
-      Text(provider.providerName)
-        .fontSize(14)
-        .fontColor(provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#17181B')
-        .fontWeight(provider.providerId === this.llmDialogProviderId
-          ? FontWeight.Medium : FontWeight.Regular)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .height(44)
-    .padding({ left: 10, right: 14 })
-    .backgroundColor(provider.providerId === this.llmDialogProviderId ? '#EAF2FF' : '#FFFFFF')
-    .borderRadius(22)
-    .border({
-      width: provider.providerId === this.llmDialogProviderId ? 1.5 : 1,
-      color: provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#E4E6EA'
-    })
-    .onClick(() => {
-      if (this.llmDialogProviderId === provider.providerId) {
-        return;
+      Row({ space: 8 }) {
+        Column() {
+          Text(this.resolveProviderInitial(this.resolveCurrentProviderName()))
+            .fontSize(14)
+            .fontColor('#FFFFFF')
+            .fontWeight(FontWeight.Medium)
+        }
+        .width(26)
+        .height(26)
+        .borderRadius(13)
+        .backgroundColor(this.resolveProviderAvatarColor(this.llmDialogProviderId))
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+
+        Text(this.resolveCurrentProviderName())
+          .fontSize(14)
+          .fontColor('#17181B')
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text('∨')
+          .fontSize(14)
+          .fontColor('#7A7D82')
       }
-      this.llmDialogProviderId = provider.providerId;
-      // Reset the preset to this provider's first model so the `当前模型`
-      // row never shows a stale selection from the previous provider.
-      this.llmDialogPresetId = provider.models.length > 0 ? provider.models[0].presetId : '';
-      this.llmModelDropdownOpen = false;
-    })
+      .width('100%')
+      .height(44)
+      .padding({ left: 10, right: 12 })
+      .backgroundColor('#FFFFFF')
+      .borderRadius(10)
+      .border({ width: 1, color: '#E4E6EA' })
+      .bindMenu(this.buildLlmProviderMenu())
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .alignItems(HorizontalAlign.Start)
   }
 
   @Builder
-  private renderLlmModelCard() {
+  private renderLlmModelRow() {
     Column({ space: 10 }) {
       Text('当前模型')
         .fontSize(13)
@@ -800,7 +763,7 @@ struct KeyboardPanel {
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(this.llmModelDropdownOpen ? '∧' : '∨')
+        Text('∨')
           .fontSize(14)
           .fontColor('#7A7D82')
       }
@@ -810,62 +773,70 @@ struct KeyboardPanel {
       .backgroundColor('#FFFFFF')
       .borderRadius(10)
       .border({ width: 1, color: '#E4E6EA' })
-      .onClick(() => {
-        this.llmModelDropdownOpen = !this.llmModelDropdownOpen;
-      })
-
-      if (this.llmModelDropdownOpen) {
-        Column({ space: 0 }) {
-          ForEach(this.resolveLlmModelsForSelectedProvider(), (preset: BuiltinModelPreset) => {
-            this.renderLlmModelOption(preset)
-          }, (preset: BuiltinModelPreset): string =>
-            `${preset.presetId}:${preset.presetId === this.llmDialogPresetId ? 1 : 0}`)
-        }
-        .width('100%')
-        .padding({ left: 4, right: 4, top: 4, bottom: 4 })
-        .backgroundColor('#F7F8FA')
-        .borderRadius(10)
-        .border({ width: 1, color: '#E4E6EA' })
-      }
+      .bindMenu(this.buildLlmModelMenu())
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-    .backgroundColor('#FFFFFF')
-    .borderRadius(14)
-    .border({ width: 1, color: '#E4E6EA' })
     .alignItems(HorizontalAlign.Start)
   }
 
-  @Builder
-  private renderLlmModelOption(preset: BuiltinModelPreset) {
-    Row({ space: 6 }) {
-      Text(preset.displayName)
-        .fontSize(13)
-        .fontColor(preset.presetId === this.llmDialogPresetId ? '#3478F6' : '#17181B')
-        .fontWeight(preset.presetId === this.llmDialogPresetId
-          ? FontWeight.Medium : FontWeight.Regular)
-        .layoutWeight(1)
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-      if (preset.presetId === this.llmDialogPresetId) {
-        Text('✓')
-          .fontSize(13)
-          .fontColor('#3478F6')
+  private buildLlmProviderMenu(): MenuElement[] {
+    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
+    let items: MenuElement[] = [];
+    for (let i = 0; i < providers.length; i++) {
+      let provider = providers[i];
+      let isActive = provider.providerId === this.llmDialogProviderId;
+      items.push({
+        value: isActive ? `${provider.providerName}  ✓` : provider.providerName,
+        action: (): void => {
+          if (this.llmDialogProviderId === provider.providerId) {
+            return;
+          }
+          this.llmDialogProviderId = provider.providerId;
+          // Reset to the provider's first model so the `当前模型` row never
+          // shows a stale preset from the previous provider.
+          this.llmDialogPresetId = provider.models.length > 0 ? provider.models[0].presetId : '';
+        }
+      });
+    }
+    return items;
+  }
+
+  private buildLlmModelMenu(): MenuElement[] {
+    let presets: BuiltinModelPreset[] = this.resolveLlmModelsForSelectedProvider();
+    let items: MenuElement[] = [];
+    for (let i = 0; i < presets.length; i++) {
+      let preset = presets[i];
+      let isActive = preset.presetId === this.llmDialogPresetId;
+      items.push({
+        value: isActive ? `${preset.displayName}  ✓` : preset.displayName,
+        action: (): void => {
+          this.llmDialogPresetId = preset.presetId;
+        }
+      });
+    }
+    if (items.length === 0) {
+      items.push({
+        value: '（该供应商暂无可用模型）',
+        action: (): void => {
+        }
+      });
+    }
+    return items;
+  }
+
+  private resolveCurrentProviderName(): string {
+    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
+    for (let i = 0; i < providers.length; i++) {
+      if (providers[i].providerId === this.llmDialogProviderId) {
+        return providers[i].providerName;
       }
     }
-    .width('100%')
-    .height(36)
-    .padding({ left: 10, right: 10 })
-    .backgroundColor(preset.presetId === this.llmDialogPresetId ? '#FFFFFF' : 'rgba(0,0,0,0)')
-    .borderRadius(8)
-    .onClick(() => {
-      this.llmDialogPresetId = preset.presetId;
-      this.llmModelDropdownOpen = false;
-    })
+    return '未选择';
   }
 
   @Builder
-  private renderLlmApiKeyCard() {
+  private renderLlmApiKeyRow() {
     Column({ space: 10 }) {
       Text('API Key')
         .fontSize(13)
@@ -934,9 +905,6 @@ struct KeyboardPanel {
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 12, bottom: 12 })
-    .backgroundColor('#FFFFFF')
-    .borderRadius(14)
-    .border({ width: 1, color: '#E4E6EA' })
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -1021,7 +989,6 @@ struct KeyboardPanel {
     this.runtimeEnableVoice = runtime.enableVoice;
     this.runtimeEnableCloudPolish = runtime.enableCloudPolish;
     this.runtimeAutoPolishVoiceResult = runtime.autoPolishVoiceResult;
-    this.runtimeDefaultEntryMode = runtime.defaultEntryMode === 'voice' ? 'voice' : 'keyboard';
     this.runtimeSaveStatus = '';
   }
 
@@ -1039,7 +1006,6 @@ struct KeyboardPanel {
     this.llmDialogApiKey = snap.apiKey;
     this.llmSaveStatus = '';
     this.llmApiKeyRevealed = false;
-    this.llmModelDropdownOpen = false;
   }
 
   private persistRuntimeSettings(successText: string): void {
@@ -1052,7 +1018,6 @@ struct KeyboardPanel {
     runtime.enableVoice = this.runtimeEnableVoice;
     runtime.enableCloudPolish = this.runtimeEnableCloudPolish;
     runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
-    runtime.defaultEntryMode = this.runtimeDefaultEntryMode === 'voice' ? 'voice' : 'keyboard';
     this.runtimeSaveStatus = '保存中…';
     session.updateRuntimeSettings(runtime, 'keyboardSettings')
       .then((): void => {
@@ -1569,7 +1534,17 @@ struct KeyboardPanel {
             .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
 
           Button() {
-            if (this.uiState.voiceState === 'recording') {
+            if (this.uiState.isPolishRunning) {
+              // Center the polishing label inside the mic circle so the
+              // status cue reads as part of the button; the surrounding
+              // pulse rings still convey motion.
+              Text('润色中')
+                .fontSize(16)
+                .fontColor('#FFFFFF')
+                .fontWeight(FontWeight.Medium)
+                .opacity(this.voicePulseExpanded ? 1 : 0.78)
+                .animation({ duration: 1400, curve: Curve.EaseInOut, iterations: 1 })
+            } else if (this.uiState.voiceState === 'recording') {
               Text('●')
                 .fontSize(48)
                 .fontColor('#FFFFFF')
@@ -1588,22 +1563,6 @@ struct KeyboardPanel {
           .onClick(() => {
             this.startOrStopVoice();
           })
-
-          // Polishing-only label: a small "润色中" chip pinned to the bottom
-          // of the big circle. The pulse animation on the surrounding rings
-          // provides the motion cue; the button itself stays a stable,
-          // perfectly circular shape so the shape never morphs.
-          if (this.uiState.isPolishRunning) {
-            Text('润色中')
-              .fontSize(11)
-              .fontColor('#FFFFFF')
-              .padding({ left: 10, right: 10, top: 3, bottom: 3 })
-              .backgroundColor('#6F7F4F')
-              .borderRadius(10)
-              .opacity(this.voicePulseExpanded ? 1 : 0.72)
-              .margin({ top: 150 })
-              .animation({ duration: 1400, curve: Curve.EaseInOut, iterations: 1 })
-          }
         }
         .width(220)
         .height(220)

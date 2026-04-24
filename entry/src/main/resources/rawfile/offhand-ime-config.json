@@ -52,10 +52,10 @@
   },
   "llmPolish": {
     "enabled": true,
-    "providerId": "kimi",
-    "providerName": "月之暗面",
+    "providerId": "moonshot",
+    "providerName": "Moonshot",
     "modelPresetId": "kimi-default",
-    "modelDisplayName": "Kimi",
+    "modelDisplayName": "Kimi K2.5",
     "apiModel": "kimi-k2.5",
     "protocol": "openai-compatible",
     "endpoint": "https://api.moonshot.cn/v1",
