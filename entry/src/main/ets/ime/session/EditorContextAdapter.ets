@@ -68,6 +68,57 @@ export class EditorContextAdapter {
     }
   }
 
+  // Deletes the entire contents of the active editor by iteratively reading
+  // the text before and after the cursor (no InputClient API exposes total
+  // length directly) and issuing delete calls for each half. We loop until
+  // both halves are empty or until we stop making progress so that a faulty
+  // editor cannot spin us forever.
+  async deleteAllText(): Promise<void> {
+    const BATCH_SIZE: number = 1024;
+    const MAX_ITERATIONS: number = 128;
+    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      let beforeLen = 0;
+      let afterLen = 0;
+      try {
+        let before = await this.inputClient.getForward(BATCH_SIZE);
+        beforeLen = typeof before === 'string' ? before.length : 0;
+      } catch (_) {
+        beforeLen = 0;
+      }
+      try {
+        let after = await this.inputClient.getBackward(BATCH_SIZE);
+        afterLen = typeof after === 'string' ? after.length : 0;
+      } catch (_) {
+        afterLen = 0;
+      }
+      if (beforeLen === 0 && afterLen === 0) {
+        return;
+      }
+      let progressed = false;
+      if (beforeLen > 0) {
+        try {
+          let ok = await this.inputClient.deleteForward(beforeLen);
+          if (ok) {
+            progressed = true;
+          }
+        } catch (_) {
+        }
+      }
+      if (afterLen > 0) {
+        try {
+          let ok = await this.inputClient.deleteBackward(afterLen);
+          if (ok) {
+            progressed = true;
+          }
+        } catch (_) {
+        }
+      }
+      if (!progressed) {
+        return;
+      }
+    }
+  }
+
   async replaceRecentText(previousText: string, nextText: string): Promise<boolean> {
     if (previousText.length > 0) {
       let deleted = await this.deleteBackward(previousText.length);

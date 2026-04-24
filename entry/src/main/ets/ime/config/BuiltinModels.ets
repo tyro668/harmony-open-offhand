@@ -41,17 +41,25 @@ const BUILTIN_MODEL_CATALOG: BuiltinModelCatalog = {
       providerName: '智谱',
       models: [
         {
-          presetId: 'z-ai-glm-5',
-          displayName: 'GLM-5',
-          apiModel: 'glm-5',
+          presetId: 'z-ai-glm-4-plus',
+          displayName: 'GLM-4-Plus',
+          apiModel: 'glm-4-plus',
           protocol: 'openai-compatible',
           endpoint: 'https://open.bigmodel.cn/api/paas/v4',
           enabled: true
         },
         {
-          presetId: 'z-ai-glm-5.1',
-          displayName: 'GLM-5.1',
-          apiModel: 'glm-5.1',
+          presetId: 'z-ai-glm-4-flash',
+          displayName: 'GLM-4-Flash',
+          apiModel: 'glm-4-flash',
+          protocol: 'openai-compatible',
+          endpoint: 'https://open.bigmodel.cn/api/paas/v4',
+          enabled: true
+        },
+        {
+          presetId: 'z-ai-glm-4-5',
+          displayName: 'GLM-4.5',
+          apiModel: 'glm-4.5',
           protocol: 'openai-compatible',
           endpoint: 'https://open.bigmodel.cn/api/paas/v4',
           enabled: true

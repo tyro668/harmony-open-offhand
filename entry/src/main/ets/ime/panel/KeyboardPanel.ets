@@ -1,4 +1,5 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import pasteboard from '@ohos.pasteboard';
 import {
   BuiltinModelPreset,
   BuiltinModelProvider,
@@ -114,13 +115,11 @@ struct KeyboardPanel {
   @State private llmDialogProviderId: string = '';
   @State private llmDialogPresetId: string = '';
   @State private llmDialogApiKey: string = '';
-  // Drill-down menu level: 'provider' shows the provider list, 'model' shows
-  // the models that belong to the currently entered provider. Using a single
-  // string keeps the state serialisable and diff-friendly for ArkUI.
-  @State private llmMenuLevel: string = 'provider';
-  // Provider the user drilled into at level 2; may differ from the currently
-  // saved selection (`llmDialogProviderId`) until they pick a model.
-  @State private llmMenuStackProviderId: string = '';
+  // Toggles masking on the API Key input; matches the eye icon in the mockup.
+  @State private llmApiKeyRevealed: boolean = false;
+  // When true, the `当前模型` row expands into an inline list of the current
+  // provider's models; tapping a model collapses it again.
+  @State private llmModelDropdownOpen: boolean = false;
   @State private llmSaveStatus: string = '';
   @State private runtimeEnableVoice: boolean = true;
   @State private runtimeEnableCloudPolish: boolean = true;
@@ -648,240 +647,359 @@ struct KeyboardPanel {
     .padding({ left: 0, right: 0, bottom: 4 })
   }
 
-  // LLM settings tab: lets the user pick a provider + model and paste the
-  // API Key directly inside the IME panel. This avoids the UIAbility-vs-IME
-  // cross-sandbox isolation issue because the save path runs entirely in
-  // the InputMethodExtensionAbility sandbox.
+  // LLM settings tab: a card-based layout inspired by mainstream mobile IME
+  // assistants. The provider is picked via a horizontal card row, the model
+  // via an inline dropdown, and the API Key via a masked input with
+  // eye/paste/clear affordances.
   @Builder
   private renderLlmSettingsGrid() {
-    Column({ space: 8 }) {
-      // Drill-down menu: level 1 shows the provider list with a summary of
-      // the currently chosen model; tapping a row enters level 2 which lists
-      // the models for that provider. Picking a model returns to level 1.
-      Column({ space: 0 }) {
-        if (this.llmMenuLevel === 'model') {
-          this.renderLlmMenuHeader()
-        } else {
-          Text('选择供应商与模型')
+    Scroll() {
+      Column({ space: 12 }) {
+        this.renderLlmProviderCard()
+        this.renderLlmModelCard()
+        this.renderLlmApiKeyCard()
+
+        if (this.llmSaveStatus.length > 0) {
+          Text(this.llmSaveStatus)
             .fontSize(11)
-            .fontColor('#60636A')
+            .fontColor('#3478F6')
             .width('100%')
-            .padding({ left: 8, top: 4, bottom: 6 })
+            .padding({ left: 4 })
         }
 
-        Scroll() {
-          Column({ space: 4 }) {
-            if (this.llmMenuLevel === 'model') {
-              ForEach(this.resolveLlmModelsForMenuStackProvider(), (preset: BuiltinModelPreset) => {
-                this.renderLlmMenuRow(
-                  preset.displayName,
-                  '',
-                  this.isCurrentPreset(preset.presetId),
-                  false,
-                  (): void => {
-                    this.llmDialogProviderId = this.llmMenuStackProviderId;
-                    this.llmDialogPresetId = preset.presetId;
-                    this.llmMenuLevel = 'provider';
-                  }
-                )
-              }, (preset: BuiltinModelPreset): string =>
-                `${preset.presetId}:${this.isCurrentPreset(preset.presetId) ? 1 : 0}`)
-            } else {
-              ForEach(listBuiltinModelProviders(), (provider: BuiltinModelProvider) => {
-                this.renderLlmMenuRow(
-                  provider.providerName,
-                  this.resolveProviderSummary(provider),
-                  provider.providerId === this.llmDialogProviderId,
-                  true,
-                  (): void => {
-                    this.llmMenuStackProviderId = provider.providerId;
-                    this.llmMenuLevel = 'model';
-                  }
-                )
-              }, (provider: BuiltinModelProvider): string =>
-                `${provider.providerId}:${provider.providerId === this.llmDialogProviderId ? 1 : 0}`)
-            }
-          }
-          .width('100%')
-          .padding({ left: 4, right: 4, top: 2, bottom: 4 })
+        Row({ space: 10 }) {
+          Button('重置')
+            .layoutWeight(1)
+            .height(40)
+            .fontSize(14)
+            .fontColor('#3478F6')
+            .fontWeight(FontWeight.Medium)
+            .backgroundColor('#FFFFFF')
+            .border({ width: 1, color: '#C7DBFF' })
+            .borderRadius(20)
+            .onClick(() => {
+              this.seedLlmDialogState();
+              this.llmSaveStatus = '';
+            })
+          Button('保存并启用')
+            .layoutWeight(2)
+            .height(40)
+            .fontSize(14)
+            .fontColor('#FFFFFF')
+            .fontWeight(FontWeight.Medium)
+            .backgroundColor('#3478F6')
+            .borderRadius(20)
+            .onClick(() => {
+              this.saveLlmDialog();
+            })
         }
         .width('100%')
-        .layoutWeight(1)
-        .scrollBar(BarState.Auto)
-        .edgeEffect(EdgeEffect.Spring)
+        .padding({ top: 4, bottom: 4 })
       }
       .width('100%')
-      .layoutWeight(1)
-      .backgroundColor('#F0F1F4')
-      .borderRadius(12)
-      .padding({ left: 4, right: 4, top: 6, bottom: 6 })
-
-      this.renderLlmApiKeyRow()
-
-      if (this.llmSaveStatus.length > 0) {
-        Text(this.llmSaveStatus)
-          .fontSize(11)
-          .fontColor('#3478F6')
-          .width('100%')
-          .padding({ left: 4 })
-      }
-
-      Row({ space: 8 }) {
-        Button('重置')
-          .layoutWeight(1)
-          .height(36)
-          .fontSize(13)
-          .fontColor('#17181B')
-          .backgroundColor('#FFFFFF')
-          .border({ width: 1, color: '#E4E6EA' })
-          .borderRadius(18)
-          .onClick(() => {
-            this.seedLlmDialogState();
-            this.llmSaveStatus = '';
-          })
-        Button('保存')
-          .layoutWeight(1)
-          .height(36)
-          .fontSize(13)
-          .fontColor('#FFFFFF')
-          .backgroundColor('#3478F6')
-          .borderRadius(18)
-          .onClick(() => {
-            this.saveLlmDialog();
-          })
-      }
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+      .padding({ left: 4, right: 4, top: 4, bottom: 8 })
+      .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
     .layoutWeight(1)
+    .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring)
   }
 
   @Builder
-  private renderLlmMenuHeader() {
-    Row({ space: 6 }) {
-      Button() {
-        Row({ space: 4 }) {
-          Text('‹')
-            .fontSize(16)
-            .fontColor('#3478F6')
-          Text('返回')
-            .fontSize(12)
-            .fontColor('#3478F6')
-        }
-      }
-      .height(28)
-      .padding({ left: 8, right: 10, top: 0, bottom: 0 })
-      .backgroundColor('rgba(0,0,0,0)')
-      .onClick(() => {
-        this.llmMenuLevel = 'provider';
-      })
-
-      Text(this.resolveMenuStackProviderName())
-        .fontSize(12)
+  private renderLlmProviderCard() {
+    Column({ space: 10 }) {
+      Text('模型提供商')
+        .fontSize(13)
         .fontColor('#17181B')
-        .fontWeight(FontWeight.Bold)
-        .layoutWeight(1)
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+
+      Scroll() {
+        Row({ space: 10 }) {
+          ForEach(listBuiltinModelProviders(), (provider: BuiltinModelProvider) => {
+            this.renderLlmProviderTile(provider)
+          }, (provider: BuiltinModelProvider): string =>
+            `${provider.providerId}:${provider.providerId === this.llmDialogProviderId ? 1 : 0}`)
+        }
+        .padding({ right: 4 })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private renderLlmProviderTile(provider: BuiltinModelProvider) {
+    // Selected tile uses a subtle blue tint + solid blue border/text to match
+    // the mockup, while idle tiles stay neutral for scanability.
+    Row({ space: 8 }) {
+      // Placeholder avatar: colored initial circle. Kept deterministic per
+      // providerId so rebuilds after state changes keep the same color.
+      Column() {
+        Text(this.resolveProviderInitial(provider.providerName))
+          .fontSize(14)
+          .fontColor('#FFFFFF')
+          .fontWeight(FontWeight.Medium)
+      }
+      .width(26)
+      .height(26)
+      .borderRadius(13)
+      .backgroundColor(this.resolveProviderAvatarColor(provider.providerId))
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+
+      Text(provider.providerName)
+        .fontSize(14)
+        .fontColor(provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#17181B')
+        .fontWeight(provider.providerId === this.llmDialogProviderId
+          ? FontWeight.Medium : FontWeight.Regular)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
-    .width('100%')
-    .padding({ left: 4, right: 8, top: 2, bottom: 6 })
-    .alignItems(VerticalAlign.Center)
-  }
-
-  @Builder
-  private renderLlmMenuRow(
-    title: string,
-    summary: string,
-    selected: boolean,
-    showChevron: boolean,
-    action: () => void
-  ) {
-    Row({ space: 6 }) {
-      Column()
-        .width(3)
-        .height(22)
-        .backgroundColor(selected ? '#3478F6' : 'rgba(0,0,0,0)')
-        .borderRadius(1.5)
-
-      Column({ space: 2 }) {
-        Text(title)
-          .fontSize(13)
-          .fontColor(selected ? '#17181B' : '#20232A')
-          .fontWeight(selected ? FontWeight.Bold : FontWeight.Regular)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        if (summary.length > 0) {
-          Text(summary)
-            .fontSize(11)
-            .fontColor('#60636A')
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      if (selected && !showChevron) {
-        Text('✓')
-          .fontSize(13)
-          .fontColor('#3478F6')
-          .padding({ right: 2 })
-      }
-      if (showChevron) {
-        Text('›')
-          .fontSize(16)
-          .fontColor('#A4A7AD')
-          .padding({ right: 2 })
-      }
-    }
-    .width('100%')
-    .height(summary.length > 0 ? 48 : 40)
-    .padding({ left: 4, right: 6 })
-    .backgroundColor(selected ? '#FFFFFF' : 'rgba(0,0,0,0)')
-    .borderRadius(10)
+    .height(44)
+    .padding({ left: 10, right: 14 })
+    .backgroundColor(provider.providerId === this.llmDialogProviderId ? '#EAF2FF' : '#FFFFFF')
+    .borderRadius(22)
+    .border({
+      width: provider.providerId === this.llmDialogProviderId ? 1.5 : 1,
+      color: provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#E4E6EA'
+    })
     .onClick(() => {
-      action();
+      if (this.llmDialogProviderId === provider.providerId) {
+        return;
+      }
+      this.llmDialogProviderId = provider.providerId;
+      // Reset the preset to this provider's first model so the `当前模型`
+      // row never shows a stale selection from the previous provider.
+      this.llmDialogPresetId = provider.models.length > 0 ? provider.models[0].presetId : '';
+      this.llmModelDropdownOpen = false;
     })
   }
 
   @Builder
-  private renderLlmApiKeyRow() {
-    Row({ space: 8 }) {
-      Text('API Key')
-        .fontSize(11)
-        .fontColor('#60636A')
-        .width(48)
-        .textAlign(TextAlign.Start)
-      TextInput({ placeholder: '粘贴 API Key', text: this.llmDialogApiKey })
-        .type(InputType.Password)
-        .fontSize(12)
-        .height(32)
-        .layoutWeight(1)
-        .backgroundColor('#FFFFFF')
-        .borderRadius(10)
-        .padding({ left: 10, right: 10 })
-        .onChange((value: string) => {
-          this.llmDialogApiKey = value;
-        })
-      Button('清空')
-        .height(32)
-        .fontSize(12)
+  private renderLlmModelCard() {
+    Column({ space: 10 }) {
+      Text('当前模型')
+        .fontSize(13)
         .fontColor('#17181B')
-        .backgroundColor('#FFFFFF')
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+
+      Row({ space: 8 }) {
+        Text(this.resolveCurrentModelLabel())
+          .fontSize(14)
+          .fontColor('#17181B')
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(this.llmModelDropdownOpen ? '∧' : '∨')
+          .fontSize(14)
+          .fontColor('#7A7D82')
+      }
+      .width('100%')
+      .height(40)
+      .padding({ left: 12, right: 12 })
+      .backgroundColor('#FFFFFF')
+      .borderRadius(10)
+      .border({ width: 1, color: '#E4E6EA' })
+      .onClick(() => {
+        this.llmModelDropdownOpen = !this.llmModelDropdownOpen;
+      })
+
+      if (this.llmModelDropdownOpen) {
+        Column({ space: 0 }) {
+          ForEach(this.resolveLlmModelsForSelectedProvider(), (preset: BuiltinModelPreset) => {
+            this.renderLlmModelOption(preset)
+          }, (preset: BuiltinModelPreset): string =>
+            `${preset.presetId}:${preset.presetId === this.llmDialogPresetId ? 1 : 0}`)
+        }
+        .width('100%')
+        .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+        .backgroundColor('#F7F8FA')
+        .borderRadius(10)
         .border({ width: 1, color: '#E4E6EA' })
-        .borderRadius(16)
-        .padding({ left: 12, right: 12, top: 0, bottom: 0 })
-        .onClick(() => {
-          this.llmDialogApiKey = '';
-          this.llmSaveStatus = '已清空';
-        })
+      }
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center)
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private renderLlmModelOption(preset: BuiltinModelPreset) {
+    Row({ space: 6 }) {
+      Text(preset.displayName)
+        .fontSize(13)
+        .fontColor(preset.presetId === this.llmDialogPresetId ? '#3478F6' : '#17181B')
+        .fontWeight(preset.presetId === this.llmDialogPresetId
+          ? FontWeight.Medium : FontWeight.Regular)
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      if (preset.presetId === this.llmDialogPresetId) {
+        Text('✓')
+          .fontSize(13)
+          .fontColor('#3478F6')
+      }
+    }
+    .width('100%')
+    .height(36)
+    .padding({ left: 10, right: 10 })
+    .backgroundColor(preset.presetId === this.llmDialogPresetId ? '#FFFFFF' : 'rgba(0,0,0,0)')
+    .borderRadius(8)
+    .onClick(() => {
+      this.llmDialogPresetId = preset.presetId;
+      this.llmModelDropdownOpen = false;
+    })
+  }
+
+  @Builder
+  private renderLlmApiKeyCard() {
+    Column({ space: 10 }) {
+      Text('API Key')
+        .fontSize(13)
+        .fontColor('#17181B')
+        .fontWeight(FontWeight.Medium)
+        .width('100%')
+
+      Row({ space: 8 }) {
+        Row({ space: 6 }) {
+          TextInput({ placeholder: '粘贴 API Key', text: this.llmDialogApiKey })
+            .type(this.llmApiKeyRevealed ? InputType.Normal : InputType.Password)
+            .fontSize(13)
+            .height(36)
+            .layoutWeight(1)
+            .backgroundColor('rgba(0,0,0,0)')
+            .borderRadius(0)
+            .padding({ left: 10, right: 4 })
+            .onChange((value: string) => {
+              this.llmDialogApiKey = value;
+            })
+          Button() {
+            Text(this.llmApiKeyRevealed ? '⊘' : '⊙')
+              .fontSize(16)
+              .fontColor('#7A7D82')
+          }
+          .height(32)
+          .width(32)
+          .backgroundColor('rgba(0,0,0,0)')
+          .borderRadius(16)
+          .onClick(() => {
+            this.llmApiKeyRevealed = !this.llmApiKeyRevealed;
+          })
+        }
+        .layoutWeight(1)
+        .height(40)
+        .padding({ right: 4 })
+        .backgroundColor('#FFFFFF')
+        .borderRadius(10)
+        .border({ width: 1, color: '#E4E6EA' })
+
+        Button('粘贴')
+          .height(40)
+          .fontSize(13)
+          .fontColor('#17181B')
+          .backgroundColor('#FFFFFF')
+          .border({ width: 1, color: '#E4E6EA' })
+          .borderRadius(10)
+          .padding({ left: 14, right: 14 })
+          .onClick(() => {
+            this.pasteLlmApiKeyFromClipboard();
+          })
+        Button('清空')
+          .height(40)
+          .fontSize(13)
+          .fontColor('#3478F6')
+          .backgroundColor('#FFFFFF')
+          .border({ width: 1, color: '#C7DBFF' })
+          .borderRadius(10)
+          .padding({ left: 14, right: 14 })
+          .onClick(() => {
+            this.llmDialogApiKey = '';
+            this.llmSaveStatus = '已清空';
+          })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 12, bottom: 12 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  private resolveCurrentModelLabel(): string {
+    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
+    for (let i: number = 0; i < providers.length; i++) {
+      let provider = providers[i];
+      if (provider.providerId !== this.llmDialogProviderId) {
+        continue;
+      }
+      for (let j: number = 0; j < provider.models.length; j++) {
+        if (provider.models[j].presetId === this.llmDialogPresetId) {
+          return `${provider.providerName} ${provider.models[j].displayName}`;
+        }
+      }
+      if (provider.models.length > 0) {
+        return `${provider.providerName} ${provider.models[0].displayName}`;
+      }
+      return provider.providerName;
+    }
+    return '未选择';
+  }
+
+  private resolveProviderInitial(providerName: string): string {
+    let trimmed = providerName.trim();
+    if (trimmed.length === 0) {
+      return '?';
+    }
+    return trimmed.substring(0, 1);
+  }
+
+  private resolveProviderAvatarColor(providerId: string): string {
+    // Stable pseudo-random color per providerId: simple hash → palette index.
+    let palette: string[] = ['#3478F6', '#34C759', '#FF9500', '#AF52DE', '#FF3B30', '#5AC8FA', '#8E8E93'];
+    let hash = 0;
+    for (let i = 0; i < providerId.length; i++) {
+      hash = (hash * 31 + providerId.charCodeAt(i)) | 0;
+    }
+    let index = Math.abs(hash) % palette.length;
+    return palette[index];
+  }
+
+  private pasteLlmApiKeyFromClipboard(): void {
+    try {
+      let systemBoard = pasteboard.getSystemPasteboard();
+      systemBoard.getData().then((data): void => {
+        try {
+          let text = data.getPrimaryText();
+          if (text && text.length > 0) {
+            this.llmDialogApiKey = text.trim();
+            this.llmSaveStatus = '已粘贴';
+          } else {
+            this.llmSaveStatus = '剪贴板为空';
+          }
+        } catch (error) {
+          this.llmSaveStatus = '粘贴失败：' + ((error as Error).message ?? String(error));
+        }
+      }).catch((error: Error): void => {
+        this.llmSaveStatus = '粘贴失败：' + (error.message ?? String(error));
+      });
+    } catch (error) {
+      this.llmSaveStatus = '粘贴失败：' + ((error as Error).message ?? String(error));
+    }
   }
 
   private resolveLlmModelsForSelectedProvider(): BuiltinModelPreset[] {
@@ -892,45 +1010,6 @@ struct KeyboardPanel {
       }
     }
     return [];
-  }
-
-  private resolveLlmModelsForMenuStackProvider(): BuiltinModelPreset[] {
-    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
-    for (let i: number = 0; i < providers.length; i++) {
-      if (providers[i].providerId === this.llmMenuStackProviderId) {
-        return providers[i].models;
-      }
-    }
-    return [];
-  }
-
-  private resolveMenuStackProviderName(): string {
-    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
-    for (let i: number = 0; i < providers.length; i++) {
-      if (providers[i].providerId === this.llmMenuStackProviderId) {
-        return providers[i].providerName;
-      }
-    }
-    return '';
-  }
-
-  private resolveProviderSummary(provider: BuiltinModelProvider): string {
-    // Show the chosen model name only on the row for the active provider so
-    // level 1 communicates the current selection without extra affordances.
-    if (provider.providerId !== this.llmDialogProviderId) {
-      return '';
-    }
-    for (let i: number = 0; i < provider.models.length; i++) {
-      if (provider.models[i].presetId === this.llmDialogPresetId) {
-        return provider.models[i].displayName;
-      }
-    }
-    return '';
-  }
-
-  private isCurrentPreset(presetId: string): boolean {
-    return this.llmMenuStackProviderId === this.llmDialogProviderId
-      && presetId === this.llmDialogPresetId;
   }
 
   private seedRuntimeSettingsState(): void {
@@ -959,9 +1038,8 @@ struct KeyboardPanel {
     this.llmDialogPresetId = resolved.preset.presetId;
     this.llmDialogApiKey = snap.apiKey;
     this.llmSaveStatus = '';
-    // Always return to level 1 so reopening the settings feels predictable.
-    this.llmMenuLevel = 'provider';
-    this.llmMenuStackProviderId = '';
+    this.llmApiKeyRevealed = false;
+    this.llmModelDropdownOpen = false;
   }
 
   private persistRuntimeSettings(successText: string): void {
@@ -1560,6 +1638,37 @@ struct KeyboardPanel {
           .padding({ left: 16, right: 16, top: 12, bottom: 0 })
           .hitTestBehavior(HitTestMode.Transparent)
       }
+
+      // Bottom-right backspace: short tap deletes one character from the
+      // host editor (mirroring the 9-key / QWERTY ⌫ key) and a long press
+      // clears the entire active input. Wrapped in a full-size Column so
+      // the circular button itself (not just its inner icon) sits in the
+      // bottom-right corner of the voice panel.
+      Column() {
+        Button() {
+          this.renderIconAsset('backspace', 26, 22)
+        }
+        .width(56)
+        .height(56)
+        .type(ButtonType.Circle)
+        .backgroundColor('#FFFFFF')
+        .border({ width: 1, color: '#E4E6EA' })
+        .onClick(() => {
+          void imeRuntime.getSessionManager()?.pressBackspace();
+        })
+        .gesture(
+          LongPressGesture({ repeat: false, duration: 450 })
+            .onAction(() => {
+              void imeRuntime.getSessionManager()?.clearEditorText();
+            })
+        )
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ right: 16, bottom: 16 })
+      .justifyContent(FlexAlign.End)
+      .alignItems(HorizontalAlign.End)
+      .hitTestBehavior(HitTestMode.Transparent)
     }
     .width('100%')
     .layoutWeight(1)

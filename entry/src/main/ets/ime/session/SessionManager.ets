@@ -510,6 +510,46 @@ export class SessionManager {
     });
   }
 
+  // Long-press backspace helper: wipes every IME-owned composition/preview
+  // piece and then removes the entire contents of the host editor. Used by
+  // the voice panel's backspace button so long-press matches the behaviour
+  // advertised in the UI.
+  async clearEditorText(): Promise<void> {
+    this.invalidatePolishActions();
+    if (this.voiceCaptureService.isRecording()) {
+      await this.stopVoiceInput(true);
+    }
+    // Reset local composition / preview state first so nothing re-emits
+    // into the editor after we finish wiping it.
+    if (this.shouldUseEnglishEngine() && this.englishEngine.hasComposition()) {
+      this.englishEngine.reset();
+      this.updateEnglishCandidateState(this.englishEngine.getState(this.shouldAutoCapitalizeEnglish()));
+    }
+    if (this.currentSubtype?.engine === 'librime' && this.rimeSessionId.length > 0) {
+      this.clearRollbackState();
+      this.rimeService.clearComposition(this.rimeSessionId);
+      let state = this.rimeService.getState(this.rimeSessionId);
+      this.syncNineKeyStateFromRawInput(state.rawInput);
+      await this.syncPreviewText(state.composingText);
+      this.updateCandidateState(state);
+    }
+    this.pendingVoiceDraftText = '';
+    this.pendingPolishSuggestion = undefined;
+    if (this.editorAdapter) {
+      try {
+        await this.editorAdapter.clearPreviewText();
+      } catch (_) {
+      }
+      await this.editorAdapter.deleteAllText();
+    }
+    keyboardStateStore.patch({
+      statusText: 'Editor cleared',
+      preedit: '',
+      voiceDraftText: '',
+      voiceTranscriptPreview: ''
+    });
+  }
+
   async pressEnter(): Promise<void> {
     hilog.info(DOMAIN, TAG,
       'pressEnter enter editorAdapter=%{public}s',
