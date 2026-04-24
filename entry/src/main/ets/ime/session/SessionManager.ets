@@ -34,6 +34,12 @@ const ASSOCIATION_CONTEXT_LIMIT = 8;
 const ASSOCIATION_MAX_CANDIDATES = 6;
 const HISTORY_MAX_SENTENCES = 512;
 
+export interface LlmSelectionSnapshot {
+  providerId: string;
+  presetId: string;
+  apiKey: string;
+}
+
 interface CommitRollbackSnapshot {
   rawInput: string;
   committedText: string;
@@ -192,6 +198,45 @@ export class SessionManager {
       });
     } catch (err) {
       hilog.error(DOMAIN, TAG, 'openHostSettingsPage failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
+  // Snapshot of the LLM-related runtime settings so the in-keyboard settings
+  // tab can render the current provider / model / apiKey without exposing the
+  // ConfigRepository internals.
+  getLlmSelectionSnapshot(): LlmSelectionSnapshot {
+    let runtime = this.configRepository.getRuntimeSettings();
+    let snapshot: LlmSelectionSnapshot = {
+      providerId: runtime.llmProviderId,
+      presetId: runtime.llmPresetId,
+      apiKey: runtime.llmApiKey
+    };
+    return snapshot;
+  }
+
+  // Persist the LLM provider/model/apiKey from within the IME process and
+  // immediately refresh the runtime config so follow-up voice-polish calls
+  // pick up the new values. This path avoids the cross-ability sandbox
+  // problem entirely because both the write and the subsequent read happen
+  // inside the InputMethodExtensionAbility's own sandbox.
+  async updateLlmSelection(providerId: string, presetId: string, apiKey: string): Promise<void> {
+    if (!this.context) {
+      hilog.warn(DOMAIN, TAG, 'updateLlmSelection: no extension context');
+      return;
+    }
+    let runtime = this.configRepository.getRuntimeSettings();
+    runtime.llmProviderId = providerId;
+    runtime.llmPresetId = presetId;
+    runtime.llmApiKey = apiKey.trim();
+    try {
+      await this.configRepository.saveRuntimeSettings(this.context, runtime);
+      hilog.info(DOMAIN, TAG,
+        'updateLlmSelection saved: provider=%{public}s preset=%{public}s apiKeyLen=%{public}d',
+        providerId, presetId, runtime.llmApiKey.length);
+      await this.refreshSessionContext('updateLlmSelection');
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'updateLlmSelection failed: %{public}s',
+        (error as Error).message ?? String(error));
     }
   }
 
@@ -628,32 +673,184 @@ export class SessionManager {
 
       this.setVoiceDraftText(transcript);
 
-      // 自动插入识别结果，不再停留在草稿区等待确认
-      await this.insertVoiceDraft();
+      // NOTE: do NOT insert the raw transcript yet — we want the editor to
+      // only ever show the polished version (or, when polish is disabled /
+      // failed, the raw transcript as a final fallback). Insertion is
+      // performed by `commitToEditor` once we have text to commit.
+
+      // Reload runtime settings right before polishing so any API key / model
+      // update made in the settings UIAbility after this IME session started
+      // is visible here. ConfigRepository.refreshRuntimeSettings is cheap
+      // (just a preferences read) and ensures we never use a stale apiKey.
+      if (this.context) {
+        try {
+          await this.configRepository.refreshRuntimeSettings(this.context);
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'refreshRuntimeSettings before polish failed: %{public}s',
+            (error as Error).message ?? String(error));
+        }
+      } else {
+        hilog.warn(DOMAIN, TAG, 'refreshRuntimeSettings before polish skipped: context missing');
+      }
 
       let statusSource: string = result.source;
       let llmConfig = this.configRepository.getConfig().llmPolish;
-      if (voiceConfig.autoPolishResult && this.activeCapabilities?.polishEnabled && llmConfig.autoPolishVoiceResult) {
+      let streamedPolish = false;
+      let polishGateAutoPolishResult = voiceConfig.autoPolishResult;
+      let polishGateCapability = this.activeCapabilities?.polishEnabled === true;
+      let polishGateAutoPolishVoice = llmConfig.autoPolishVoiceResult;
+      let polishGateLlmEnabled = llmConfig.enabled;
+      let polishGateHasEndpoint = llmConfig.endpoint.length > 0;
+      let polishGateHasApiKey = llmConfig.apiKey !== undefined && llmConfig.apiKey.length > 0;
+      let polishGateHasApiModel = llmConfig.apiModel.length > 0;
+      hilog.info(DOMAIN, TAG,
+        'voice polish gate: voice.autoPolishResult=%{public}s capability.polishEnabled=%{public}s llm.autoPolishVoiceResult=%{public}s llm.enabled=%{public}s hasEndpoint=%{public}s hasApiKey=%{public}s hasApiModel=%{public}s providerId=%{public}s apiModel=%{public}s protocol=%{public}s restrictedReason=%{public}s',
+        String(polishGateAutoPolishResult),
+        String(polishGateCapability),
+        String(polishGateAutoPolishVoice),
+        String(polishGateLlmEnabled),
+        String(polishGateHasEndpoint),
+        String(polishGateHasApiKey),
+        String(polishGateHasApiModel),
+        llmConfig.providerId,
+        llmConfig.apiModel,
+        llmConfig.protocol,
+        this.activeCapabilities?.restrictedReason ?? 'n/a');
+      if (polishGateAutoPolishResult && polishGateCapability && polishGateAutoPolishVoice) {
         keyboardStateStore.patch({
           isPolishRunning: true,
           voiceStatusText: 'Polishing transcript...',
           statusText: 'LLM polishing voice transcript'
         });
-        let polishResult = await this.llmPolishService.polishText(llmConfig, {
-          text: transcript,
-          locale: this.currentSubtype.locale,
-          subtypeId: this.currentSubtype.id,
-          style: llmConfig.style
-        });
-        if (polishResult.text.length > 0 && polishResult.text !== transcript) {
-          this.presentPolishSuggestion({
-            sourceText: transcript,
-            suggestedText: polishResult.text,
-            source: 'voice_auto',
-            provider: polishResult.provider
+
+        // Commit helper: on the first call inserts into the editor, on
+        // subsequent calls replaces the previously committed text. This
+        // guarantees nothing reaches the editor until polished text is
+        // available (either the first SSE delta or the non-streaming
+        // result), and then progressively grows/replaces it.
+        let displayedText = '';
+        let commitToEditor = async (nextText: string): Promise<boolean> => {
+          let editorAdapter = this.editorAdapter;
+          if (!editorAdapter) {
+            return false;
+          }
+          if (nextText === displayedText) {
+            return true;
+          }
+          let ok: boolean;
+          if (displayedText.length === 0) {
+            ok = await editorAdapter.insertText(nextText);
+          } else {
+            ok = await editorAdapter.replaceRecentText(displayedText, nextText);
+          }
+          if (ok) {
+            displayedText = nextText;
+          }
+          return ok;
+        };
+        let streamSucceededWithText = false;
+        let onDeltaAsync = async (accumulated: string): Promise<void> => {
+          if (accumulated.length === 0) {
+            return;
+          }
+          let ok = await commitToEditor(accumulated);
+          if (ok) {
+            streamSucceededWithText = true;
+            keyboardStateStore.patch({
+              voiceTranscriptPreview: accumulated,
+              voiceStatusText: accumulated
+            });
+          }
+        };
+        // Serialize delta→editor calls so a fast SSE stream doesn't overlap
+        // insert/replace operations on the InputClient.
+        let pendingDelta: Promise<void> = Promise.resolve();
+        try {
+          hilog.info(DOMAIN, TAG, 'voice polish: invoking streamPolishText transcriptLen=%{public}d',
+            transcript.length);
+          let polishResult = await this.llmPolishService.streamPolishText(llmConfig, {
+            text: transcript,
+            locale: this.currentSubtype.locale,
+            subtypeId: this.currentSubtype.id,
+            style: llmConfig.style
+          }, {
+            onDelta: (_delta: string, accumulated: string): void => {
+              pendingDelta = pendingDelta.then((): Promise<void> => onDeltaAsync(accumulated));
+            }
           });
-          statusSource = polishResult.provider;
+          await pendingDelta;
+          hilog.info(DOMAIN, TAG,
+            'voice polish: stream returned source=%{public}s provider=%{public}s textLen=%{public}d displayedLen=%{public}d',
+            polishResult.source, polishResult.provider, polishResult.text.length, displayedText.length);
+
+          if (polishResult.text.length > 0 && polishResult.text !== displayedText) {
+            let ok = await commitToEditor(polishResult.text);
+            if (ok) {
+              streamSucceededWithText = true;
+            }
+          }
+          if (streamSucceededWithText && displayedText.length > 0) {
+            streamedPolish = true;
+            statusSource = polishResult.provider;
+            this.trackCommittedText(displayedText);
+            keyboardStateStore.patch({
+              voiceTranscriptPreview: displayedText
+            });
+          }
+        } catch (error) {
+          hilog.warn(DOMAIN, TAG, 'streamPolishText failed: %{public}s',
+            (error as Error).message ?? String(error));
         }
+
+        // If streaming produced nothing (e.g. config missing or server hiccup)
+        // fall back to the non-streaming polish call and commit its result.
+        if (!streamedPolish) {
+          hilog.info(DOMAIN, TAG, 'voice polish: streaming produced no text, falling back to non-streaming polishText');
+          try {
+            let polishResult = await this.llmPolishService.polishText(llmConfig, {
+              text: transcript,
+              locale: this.currentSubtype.locale,
+              subtypeId: this.currentSubtype.id,
+              style: llmConfig.style
+            });
+            hilog.info(DOMAIN, TAG,
+              'voice polish: non-stream returned source=%{public}s provider=%{public}s textLen=%{public}d',
+              polishResult.source, polishResult.provider, polishResult.text.length);
+            if (polishResult.text.length > 0) {
+              let ok = await commitToEditor(polishResult.text);
+              if (ok) {
+                this.trackCommittedText(displayedText);
+                statusSource = polishResult.provider;
+                keyboardStateStore.patch({
+                  voiceTranscriptPreview: displayedText
+                });
+              } else {
+                hilog.warn(DOMAIN, TAG, 'voice polish: commit of non-streaming result failed');
+              }
+            }
+          } catch (error) {
+            hilog.warn(DOMAIN, TAG, 'voice polish fallback polishText failed: %{public}s',
+              (error as Error).message ?? String(error));
+          }
+        }
+
+        // Last-resort: both streaming and non-streaming polish produced
+        // no usable text — commit the raw ASR transcript so the user's
+        // speech is not silently dropped.
+        if (displayedText.length === 0) {
+          hilog.warn(DOMAIN, TAG, 'voice polish: no polished text produced, inserting raw transcript');
+          let ok = await commitToEditor(transcript);
+          if (ok) {
+            this.trackCommittedText(displayedText);
+            keyboardStateStore.patch({
+              voiceTranscriptPreview: displayedText
+            });
+          }
+        }
+      } else {
+        hilog.info(DOMAIN, TAG, 'voice polish: skipped (gate closed)');
+        // Gate closed → behave as before: commit the raw ASR transcript.
+        await this.insertVoiceDraft();
       }
 
       keyboardStateStore.patch({
@@ -712,18 +909,25 @@ export class SessionManager {
         });
         return;
       }
-      this.presentPolishSuggestion({
-        sourceText: sourceText,
-        suggestedText: result.text,
-        source: 'manual',
-        provider: result.provider
-      });
+      // Directly replace the recent text with the polished version instead
+      // of surfacing a confirmation UI.
+      let replaced = false;
+      if (this.editorAdapter) {
+        replaced = await this.editorAdapter.replaceRecentText(sourceText, result.text);
+      }
+      if (replaced) {
+        this.trackCommittedText(result.text);
+      } else {
+        hilog.warn(DOMAIN, TAG, 'polishPendingText: replaceRecentText failed');
+      }
       keyboardStateStore.patch({
-        statusText: `Polish suggestion ready (${result.provider})`,
+        statusText: replaced ?
+          `Polished (${result.provider})` :
+          `Polish ready but apply failed (${result.provider})`,
         voiceTranscriptPreview: result.text,
         isPolishRunning: false
       });
-      void ImeTelemetry.trackBehavior('polish_suggested', `provider=${result.provider};transport=${result.source};source=manual`);
+      void ImeTelemetry.trackBehavior('polish_applied', `provider=${result.provider};transport=${result.source};source=manual;auto=true`);
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Polish failed: %{public}s', JSON.stringify(error));
       keyboardStateStore.patch({

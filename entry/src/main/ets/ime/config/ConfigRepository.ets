@@ -190,6 +190,16 @@ export class ConfigRepository {
     this.config = applyRuntimeSettings(this.baseConfig, this.runtimeSettings);
   }
 
+  // Save the provided runtime settings through OffhandSettingsStore and
+  // immediately reapply them to the in-memory config snapshot. Used by the
+  // in-keyboard LLM settings panel so settings edited inside the IME
+  // extension sandbox persist and take effect without a second load pass.
+  async saveRuntimeSettings(context: common.Context, settings: OffhandRuntimeSettings): Promise<void> {
+    await this.settingsStore.save(context, settings);
+    this.runtimeSettings = settings;
+    this.config = applyRuntimeSettings(this.baseConfig, this.runtimeSettings);
+  }
+
   private async loadJsonResource<T>(context: InputMethodExtensionContext, path: string, fallback: T): Promise<T> {
     try {
       let content = await context.resourceManager.getRawFileContent(path);
@@ -314,7 +324,10 @@ function createDefaultLlmPolishConfig(): OffhandLlmPolishConfig {
     apiModel: selection.preset.apiModel,
     protocol: selection.preset.protocol,
     endpoint: selection.preset.endpoint,
-    requestTimeoutMs: 12000,
+    // 12s was too aggressive for SSE first-token latency against remote
+    // LLM gateways (observed 12s stream-timeout on GLM). Give the read
+    // timeout enough slack for first-token plus the slowest finish.
+    requestTimeoutMs: 45000,
     autoPolishVoiceResult: true,
     fallbackToLocalRewrite: true,
     style: 'clean_conversational'

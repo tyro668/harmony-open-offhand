@@ -1,7 +1,9 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { CandidateItem, KeyboardLayoutId, KeyboardLayoutOption, SubtypeSummary } from '../common/ImeTypes';
+import { BuiltinModelPreset, BuiltinModelProvider, CandidateItem, KeyboardLayoutId, KeyboardLayoutOption, SubtypeSummary } from '../common/ImeTypes';
 import { imeRuntime } from '../runtime/ImeRuntime';
 import { KeyboardUiState, keyboardStateStore } from '../session/KeyboardStateStore';
+import { listBuiltinModelProviders, resolveBuiltinModelSelection } from '../config/BuiltinModels';
+import { LlmSelectionSnapshot } from '../session/SessionManager';
 
 const PANEL_DOMAIN: number = 0xFF10;
 const PANEL_TAG: string = 'KeyboardPanel';
@@ -99,6 +101,12 @@ struct KeyboardPanel {
   // toggles every PULSE_INTERVAL_MS so the outer rings animate out/in
   // continuously while we are waiting for the user to keep speaking.
   @State private voicePulseExpanded: boolean = false;
+  // LLM settings tab state: selection + API key editor buffers. These are
+  // seeded from SessionManager.getLlmSelectionSnapshot when the tab opens.
+  @State private llmDialogProviderId: string = '';
+  @State private llmDialogPresetId: string = '';
+  @State private llmDialogApiKey: string = '';
+  @State private llmSaveStatus: string = '';
   private voicePulseTimer?: number;
   private unsubscribe?: () => void;
 
@@ -374,22 +382,30 @@ struct KeyboardPanel {
       Blank()
         .height(8)
 
-      if (this.activeSettingsTab === 'input') {
-        this.renderInputSettingsGrid()
+      if (this.activeSettingsTab === 'llm') {
+        // LLM tab takes the entire remaining space and renders its own
+        // padding. We intentionally skip the pager dots and trailing Blank
+        // used by common/input because the LLM editor needs the full panel
+        // height for the provider/model chips + API key input.
+        this.renderLlmSettingsGrid()
       } else {
-        this.renderCommonSettingsGrid()
+        if (this.activeSettingsTab === 'input') {
+          this.renderInputSettingsGrid()
+        } else {
+          this.renderCommonSettingsGrid()
+        }
+
+        Blank()
+          .layoutWeight(1)
+
+        Blank()
+          .height(6)
+
+        this.renderSettingsPager()
+
+        Blank()
+          .height(4)
       }
-
-      Blank()
-        .layoutWeight(1)
-
-      Blank()
-        .height(6)
-
-      this.renderSettingsPager()
-
-      Blank()
-        .height(4)
     }
     .width('100%')
     .layoutWeight(1)
@@ -414,6 +430,7 @@ struct KeyboardPanel {
       Row({ space: 4 }) {
         this.renderSettingsTabButton('common', '常用功能')
         this.renderSettingsTabButton('input', '输入方式')
+        this.renderSettingsTabButton('llm', '大模型')
       }
       .layoutWeight(1)
       .height(48)
@@ -454,6 +471,9 @@ struct KeyboardPanel {
       .shadow(this.resolveSettingsTabShadow(this.activeSettingsTab === tabId))
       .onClick(() => {
         this.activeSettingsTab = tabId;
+        if (tabId === 'llm') {
+          this.seedLlmDialogState();
+        }
       })
   }
 
@@ -507,6 +527,216 @@ struct KeyboardPanel {
     }
     .width('100%')
     .padding({ left: 0, right: 0, bottom: 4 })
+  }
+
+  // LLM settings tab: lets the user pick a provider + model and paste the
+  // API Key directly inside the IME panel. This avoids the UIAbility-vs-IME
+  // cross-sandbox isolation issue because the save path runs entirely in
+  // the InputMethodExtensionAbility sandbox.
+  @Builder
+  private renderLlmSettingsGrid() {
+    Column({ space: 0 }) {
+      // Scrollable body — provider/model chips + API key + status.
+      Scroll() {
+        Column({ space: 10 }) {
+          // Provider row — Flex with Wrap so extra providers don't overflow.
+          Text('供应商')
+            .fontSize(12)
+            .fontColor('#60636A')
+            .width('100%')
+          Flex({
+            direction: FlexDirection.Row,
+            wrap: FlexWrap.Wrap,
+            justifyContent: FlexAlign.Start,
+            alignItems: ItemAlign.Center
+          }) {
+            ForEach(listBuiltinModelProviders(), (provider: BuiltinModelProvider) => {
+              Button() {
+                Text(provider.providerName)
+                  .fontSize(12)
+                  .fontColor(provider.providerId === this.llmDialogProviderId ? '#FFFFFF' : '#17181B')
+                  .textAlign(TextAlign.Center)
+                  .maxLines(1)
+              }
+              .height(34)
+              .margin({ right: 8, bottom: 8 })
+              .padding({ left: 14, right: 14, top: 0, bottom: 0 })
+              .backgroundColor(provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#FFFFFF')
+              .border({
+                width: 1,
+                color: provider.providerId === this.llmDialogProviderId ? '#3478F6' : '#E4E6EA'
+              })
+              .borderRadius(17)
+              .onClick(() => {
+                this.llmDialogProviderId = provider.providerId;
+                this.llmDialogPresetId = provider.models.length > 0 ? provider.models[0].presetId : '';
+              })
+            }, (provider: BuiltinModelProvider) => provider.providerId)
+          }
+          .width('100%')
+
+          // Model row
+          Text('模型')
+            .fontSize(12)
+            .fontColor('#60636A')
+            .width('100%')
+          Flex({
+            direction: FlexDirection.Row,
+            wrap: FlexWrap.Wrap,
+            justifyContent: FlexAlign.Start,
+            alignItems: ItemAlign.Center
+          }) {
+            ForEach(this.resolveLlmModelsForSelectedProvider(), (preset: BuiltinModelPreset) => {
+              Button() {
+                Text(preset.displayName)
+                  .fontSize(12)
+                  .fontColor(preset.presetId === this.llmDialogPresetId ? '#FFFFFF' : '#17181B')
+                  .textAlign(TextAlign.Center)
+                  .maxLines(1)
+              }
+              .height(34)
+              .margin({ right: 8, bottom: 8 })
+              .padding({ left: 14, right: 14, top: 0, bottom: 0 })
+              .backgroundColor(preset.presetId === this.llmDialogPresetId ? '#3478F6' : '#FFFFFF')
+              .border({
+                width: 1,
+                color: preset.presetId === this.llmDialogPresetId ? '#3478F6' : '#E4E6EA'
+              })
+              .borderRadius(17)
+              .onClick(() => {
+                this.llmDialogPresetId = preset.presetId;
+              })
+            }, (preset: BuiltinModelPreset) => preset.presetId)
+          }
+          .width('100%')
+
+          // API Key editor
+          Text('API Key')
+            .fontSize(12)
+            .fontColor('#60636A')
+            .width('100%')
+          Row({ space: 8 }) {
+            TextInput({ placeholder: '粘贴 API Key', text: this.llmDialogApiKey })
+              .type(InputType.Password)
+              .fontSize(13)
+              .height(40)
+              .layoutWeight(1)
+              .backgroundColor('#FFFFFF')
+              .borderRadius(12)
+              .padding({ left: 12, right: 12 })
+              .onChange((value: string) => {
+                this.llmDialogApiKey = value;
+              })
+            Button('清空')
+              .height(40)
+              .fontSize(13)
+              .fontColor('#17181B')
+              .backgroundColor('#FFFFFF')
+              .border({ width: 1, color: '#E4E6EA' })
+              .borderRadius(20)
+              .padding({ left: 14, right: 14, top: 0, bottom: 0 })
+              .onClick(() => {
+                this.llmDialogApiKey = '';
+                this.llmSaveStatus = '已清空 API Key，点击“保存”后生效。';
+              })
+          }
+          .width('100%')
+
+          if (this.llmSaveStatus.length > 0) {
+            Text(this.llmSaveStatus)
+              .fontSize(12)
+              .fontColor('#3478F6')
+              .width('100%')
+          }
+
+          // Trailing spacer so the last element isn't flush against the
+          // fixed bottom action bar.
+          Blank()
+            .height(12)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+      }
+      .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring)
+      .width('100%')
+      .layoutWeight(1)
+
+      // Fixed bottom action row — stays visible regardless of scroll.
+      Row({ space: 12 }) {
+        Button('取消')
+          .layoutWeight(1)
+          .height(44)
+          .fontSize(14)
+          .fontColor('#17181B')
+          .backgroundColor('#FFFFFF')
+          .border({ width: 1, color: '#E4E6EA' })
+          .borderRadius(22)
+          .onClick(() => {
+            this.seedLlmDialogState();
+            this.llmSaveStatus = '';
+          })
+        Button('保存')
+          .layoutWeight(1)
+          .height(44)
+          .fontSize(14)
+          .fontColor('#FFFFFF')
+          .backgroundColor('#3478F6')
+          .borderRadius(22)
+          .onClick(() => {
+            this.saveLlmDialog();
+          })
+      }
+      .width('100%')
+      .padding({ left: 4, right: 4, top: 8, bottom: 8 })
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  private resolveLlmModelsForSelectedProvider(): BuiltinModelPreset[] {
+    let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
+    for (let i: number = 0; i < providers.length; i++) {
+      if (providers[i].providerId === this.llmDialogProviderId) {
+        return providers[i].models;
+      }
+    }
+    return [];
+  }
+
+  private seedLlmDialogState(): void {
+    let session = imeRuntime.getSessionManager();
+    if (!session) {
+      return;
+    }
+    let snap: LlmSelectionSnapshot = session.getLlmSelectionSnapshot();
+    // Resolve against the builtin catalog so we always end up on a valid
+    // provider/preset pair even if persisted settings are stale.
+    let resolved = resolveBuiltinModelSelection(snap.providerId, snap.presetId);
+    this.llmDialogProviderId = resolved.provider.providerId;
+    this.llmDialogPresetId = resolved.preset.presetId;
+    this.llmDialogApiKey = snap.apiKey;
+    this.llmSaveStatus = '';
+  }
+
+  private saveLlmDialog(): void {
+    let session = imeRuntime.getSessionManager();
+    if (!session) {
+      this.llmSaveStatus = '保存失败：会话未就绪';
+      return;
+    }
+    let providerId: string = this.llmDialogProviderId;
+    let presetId: string = this.llmDialogPresetId;
+    let apiKey: string = this.llmDialogApiKey;
+    this.llmSaveStatus = '保存中…';
+    session.updateLlmSelection(providerId, presetId, apiKey)
+      .then((): void => {
+        this.llmSaveStatus = 'API Key 已保存，润色将使用最新配置。';
+      })
+      .catch((error: Error): void => {
+        this.llmSaveStatus = '保存失败：' + (error.message ?? String(error));
+      });
   }
 
   @Builder

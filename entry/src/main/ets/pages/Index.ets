@@ -34,6 +34,8 @@ const TEXT_MUTED = '#96A0AE';
 const DIVIDER_COLOR = '#EEF2F6';
 const SUCCESS_GREEN = '#19A79C';
 const ERROR_ORANGE = '#C46B29';
+const OVERLAY_MASK = 'rgba(7, 15, 27, 0.38)';
+const DIALOG_BACKGROUND = '#FFFFFF';
 
 @Entry
 @Component
@@ -54,6 +56,13 @@ struct Index {
     (preset: BuiltinModelPreset): string => preset.presetId
   );
   @State private llmApiKey: string = '';
+  @State private showModelDialog: boolean = false;
+  @State private dialogProviderId: string = DEFAULT_MODEL_SELECTION.provider.providerId;
+  @State private dialogPresetId: string = DEFAULT_MODEL_SELECTION.preset.presetId;
+  @State private dialogAvailableModelPresetIds: string[] = DEFAULT_MODEL_SELECTION.provider.models.map(
+    (preset: BuiltinModelPreset): string => preset.presetId
+  );
+  @State private dialogApiKey: string = '';
   @State private llmStyle: string = 'clean_conversational';
   @State private defaultEntryMode: string = 'keyboard';
   private readonly settingsStore: OffhandSettingsStore = new OffhandSettingsStore();
@@ -73,15 +82,23 @@ struct Index {
   }
 
   build() {
-    Scroll() {
-      Column({ space: 20 }) {
-        this.renderHeader()
-        this.renderInputCard()
-        this.renderModelCard()
-        this.renderPermissionCard()
+    Stack({ alignContent: Alignment.TopStart }) {
+      Scroll() {
+        Column({ space: 20 }) {
+          this.renderHeader()
+          this.renderInputCard()
+          this.renderModelCard()
+          this.renderPermissionCard()
+        }
+        .width('100%')
+        .padding({ left: 20, right: 20, top: 18, bottom: 28 })
       }
       .width('100%')
-      .padding({ left: 20, right: 20, top: 18, bottom: 28 })
+      .height('100%')
+
+      if (this.showModelDialog) {
+        this.renderModelDialog()
+      }
     }
     .width('100%')
     .height('100%')
@@ -181,44 +198,12 @@ struct Index {
     Column({ space: 0 }) {
       this.renderCardHeader('section-model', '润色模型')
 
-      Column({ space: 22 }) {
-        this.renderDropdownSection('供应商',
-          this.builtinProviders.map((provider: BuiltinModelProvider): SelectOption => {
-            return { value: provider.providerName };
-          }),
-          this.resolveProviderIndex(this.llmProviderId),
-          (index: number): void => {
-            let provider = this.builtinProviders[index];
-            if (provider) {
-              this.selectProvider(provider);
-              this.commitSettingsChange();
-            }
-          })
-
-        this.renderDropdownSection('模型',
-          this.availableModelPresetIds.map((presetId: string): SelectOption => {
-            return { value: this.resolvePresetName(presetId) };
-          }),
-          this.resolvePresetIndex(this.llmPresetId),
-          (index: number): void => {
-            let presetId = this.availableModelPresetIds[index];
-            if (presetId) {
-              this.llmPresetId = presetId;
-              this.commitSettingsChange();
-            }
-          })
-
-        this.renderInputField('API Key', '输入 API Key', this.llmApiKey,
-          (value: string): void => {
-            // Live editing only updates local state; we persist on commit
-            // (blur / Enter / explicit 保存 button) so a rapid series of
-            // keystrokes doesn't fire an async save storm that can race and
-            // lose the last value.
-            this.llmApiKey = value;
-          },
-          (): void => {
-            this.commitSettingsChange();
-          })
+      Column({ space: 14 }) {
+        if (this.isModelConfigured()) {
+          this.renderConfiguredModelRow()
+        } else {
+          this.renderAddModelButton()
+        }
       }
       .width('100%')
       .padding({ left: 18, right: 18, top: 18, bottom: 20 })
@@ -231,39 +216,269 @@ struct Index {
   }
 
   @Builder
-  private renderDropdownSection(
-    title: string,
-    options: SelectOption[],
-    selectedIndex: number,
-    onSelect: (index: number) => void
-  ) {
-    Column({ space: 12 }) {
+  private renderAddModelButton() {
+    Button() {
+      Row({ space: 10 }) {
+        Text('+')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+
+        Text('添加模型')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+      }
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(50)
+    .backgroundColor(PRIMARY_BLUE)
+    .borderRadius(18)
+    .onClick((): void => {
+      this.openModelDialog();
+    })
+  }
+
+  @Builder
+  private renderConfiguredModelRow() {
+    Row({ space: 12 }) {
+      Column({ space: 4 }) {
+        Text(this.resolveProviderName(this.llmProviderId))
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(TEXT_SECONDARY)
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+
+        Text(this.resolvePresetName(this.llmPresetId))
+          .fontSize(17)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(TEXT_PRIMARY)
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      this.renderMiniActionButton('编辑', PRIMARY_BLUE, '#FFFFFF', (): void => {
+        this.openModelDialog();
+      })
+
+      this.renderMiniActionButton('删除', SOFT_GRAY, ERROR_ORANGE, (): void => {
+        this.deleteConfiguredModel();
+      })
+    }
+    .width('100%')
+    .padding({ top: 4, bottom: 4 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  private isModelConfigured(): boolean {
+    return this.llmApiKey.trim().length > 0;
+  }
+
+  private deleteConfiguredModel(): void {
+    // Clearing the API key is the single source of truth for "is a model
+    // configured". Reset provider/model to the catalog default so the next
+    // "add" starts from a clean slate.
+    this.llmApiKey = '';
+    this.applyProviderSelection(
+      DEFAULT_MODEL_SELECTION.provider.providerId,
+      DEFAULT_MODEL_SELECTION.preset.presetId);
+    this.commitSettingsChange();
+  }
+
+  @Builder
+  private renderModelSummaryRow(title: string, value: string) {
+    Row({ space: 12 }) {
       Text(title)
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .fontColor(TEXT_SECONDARY)
-        .width('100%')
+        .width(72)
         .textAlign(TextAlign.Start)
 
-      Select(options)
-        .selected(selectedIndex >= 0 ? selectedIndex : 0)
-        .value(selectedIndex >= 0 && selectedIndex < options.length ? options[selectedIndex].value as string : '')
-        .font({ size: 16, weight: FontWeight.Medium })
+      Text(value)
+        .layoutWeight(1)
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
         .fontColor(TEXT_PRIMARY)
-        .selectedOptionFont({ size: 16, weight: FontWeight.Bold })
-        .selectedOptionFontColor(PRIMARY_BLUE)
-        .optionFont({ size: 16, weight: FontWeight.Medium })
-        .optionFontColor(TEXT_PRIMARY)
-        .backgroundColor(SOFT_GRAY)
-        .borderRadius(14)
+        .textAlign(TextAlign.Start)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private renderModelDialog() {
+    Column() {
+      Blank()
+        .layoutWeight(1)
         .width('100%')
-        .height(48)
-        .onSelect((index: number, _text?: string): void => {
-          onSelect(index);
+        .onClick((): void => {
+          this.closeModelDialog();
+        })
+
+      Row() {
+        Blank()
+          .layoutWeight(1)
+          .height('100%')
+          .onClick((): void => {
+            this.closeModelDialog();
+          })
+
+        Column({ space: 0 }) {
+          Row() {
+            Text(this.isModelConfigured() ? '编辑模型' : '添加模型')
+              .fontSize(22)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(TEXT_PRIMARY)
+              .layoutWeight(1)
+              .textAlign(TextAlign.Start)
+
+            Button('×')
+              .width(36)
+              .height(36)
+              .fontSize(24)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(TEXT_SECONDARY)
+              .backgroundColor(SOFT_GRAY)
+              .borderRadius(18)
+              .onClick((): void => {
+                this.closeModelDialog();
+              })
+          }
+          .width('100%')
+          .padding({ left: 22, right: 22, top: 20, bottom: 18 })
+          .alignItems(VerticalAlign.Center)
+
+          Column()
+            .width('100%')
+            .height(1)
+            .backgroundColor(DIVIDER_COLOR)
+
+          Column({ space: 20 }) {
+            // NOTE: previously these two sections were rendered through a
+            // shared @Builder renderChipSection(ids: string[], ...). ArkUI
+            // treats the array argument as a value copy inside the nested
+            // @Builder, so mutating `dialogAvailableModelPresetIds` via
+            // `applyDialogProviderSelection` did NOT rebuild the model
+            // chips — the list still showed the previous provider's presets.
+            // Inlining the ForEach here re-establishes the @State → UI
+            // dependency and fixes "switching provider keeps old models".
+            Column({ space: 12 }) {
+              Text('供应商')
+                .fontSize(15)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(TEXT_SECONDARY)
+                .width('100%')
+                .textAlign(TextAlign.Start)
+
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(this.builtinProviders.map(
+                  (provider: BuiltinModelProvider): string => provider.providerId),
+                  (providerId: string) => {
+                    this.renderChoiceChip(
+                      this.resolveProviderName(providerId),
+                      this.dialogProviderId === providerId,
+                      (): void => {
+                        this.applyDialogProviderSelection(providerId, '');
+                      })
+                  },
+                  (providerId: string): string => {
+                    return `${providerId}:${this.dialogProviderId === providerId ? '1' : '0'}`;
+                  })
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
+            Column({ space: 12 }) {
+              Text('模型')
+                .fontSize(15)
+                .fontWeight(FontWeight.Medium)
+                .fontColor(TEXT_SECONDARY)
+                .width('100%')
+                .textAlign(TextAlign.Start)
+
+              Flex({ wrap: FlexWrap.Wrap }) {
+                ForEach(this.dialogAvailableModelPresetIds,
+                  (presetId: string) => {
+                    this.renderChoiceChip(
+                      this.resolveDialogPresetName(presetId),
+                      this.dialogPresetId === presetId,
+                      (): void => {
+                        this.dialogPresetId = presetId;
+                      })
+                  },
+                  (presetId: string): string => {
+                    // Include provider id in the key so switching provider
+                    // invalidates every existing model chip even when the
+                    // new preset list happens to share an id prefix.
+                    return `${this.dialogProviderId}:${presetId}:${this.dialogPresetId === presetId ? '1' : '0'}`;
+                  })
+              }
+              .width('100%')
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+
+            this.renderInputField('API Key', '输入 API Key', this.dialogApiKey, (value: string): void => {
+              this.dialogApiKey = value;
+            })
+
+            Button('完成并关闭')
+              .width('100%')
+              .height(50)
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#FFFFFF')
+              .backgroundColor(PRIMARY_BLUE)
+              .borderRadius(18)
+              .onClick((): void => {
+                this.closeModelDialog();
+              })
+          }
+          .width('100%')
+          .padding({ left: 22, right: 22, top: 20, bottom: 22 })
+        }
+        .width('86%')
+        .backgroundColor(DIALOG_BACKGROUND)
+        .borderRadius(28)
+        .shadow({
+          radius: 16,
+          color: '#260A2540',
+          offsetX: 0,
+          offsetY: 10
+        })
+
+        Blank()
+          .layoutWeight(1)
+          .height('100%')
+          .onClick((): void => {
+            this.closeModelDialog();
+          })
+      }
+      .width('100%')
+
+      Blank()
+        .layoutWeight(1)
+        .width('100%')
+        .onClick((): void => {
+          this.closeModelDialog();
         })
     }
     .width('100%')
-    .alignItems(HorizontalAlign.Start)
+    .height('100%')
+    .backgroundColor(OVERLAY_MASK)
   }
 
   @Builder
@@ -522,7 +737,16 @@ struct Index {
           this.renderChoiceChip(resolveLabel(id), isSelected(id), (): void => {
             onSelect(id);
           })
-        }, (id: string): string => id)
+        }, (id: string): string => {
+          // ArkUI ForEach only re-renders chips when the key changes. If the
+          // key were just `id`, switching selection between two items in the
+          // same list wouldn't rebuild either chip (ids don't move) and the
+          // selected/unselected styling would look frozen — which is exactly
+          // the "can't pick another provider/model" symptom reported.
+          // Including selection state in the key forces both the old and
+          // new chip to rebuild on every pick.
+          return `${id}:${isSelected(id) ? '1' : '0'}`;
+        })
       }
       .width('100%')
     }
@@ -533,6 +757,7 @@ struct Index {
   @Builder
   private renderChoiceChip(label: string, selected: boolean, onClick: () => void) {
     Button(label)
+      .type(ButtonType.Capsule)
       .height(48)
       .fontSize(16)
       .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
@@ -699,30 +924,23 @@ struct Index {
     return this.builtinProviders[0];
   }
 
-  private resolveProviderIndex(providerId: string): number {
-    for (let index = 0; index < this.builtinProviders.length; index++) {
-      if (this.builtinProviders[index].providerId === providerId) {
-        return index;
-      }
-    }
-    return 0;
-  }
-
-  private resolvePresetIndex(presetId: string): number {
-    for (let index = 0; index < this.availableModelPresetIds.length; index++) {
-      if (this.availableModelPresetIds[index] === presetId) {
-        return index;
-      }
-    }
-    return 0;
-  }
-
   private getSelectedProvider(): BuiltinModelProvider {
     return this.resolveProviderById(this.llmProviderId);
   }
 
   private selectProvider(provider: BuiltinModelProvider): void {
     this.applyProviderSelection(provider.providerId, '');
+  }
+
+  private resolveDialogPresetName(presetId: string): string {
+    let provider = this.resolveProviderById(this.dialogProviderId);
+    for (let index = 0; index < provider.models.length; index++) {
+      let preset = provider.models[index];
+      if (preset.presetId === presetId) {
+        return preset.displayName;
+      }
+    }
+    return presetId;
   }
 
   private applyProviderSelection(providerId: string, preferredPresetId: string): void {
@@ -737,12 +955,37 @@ struct Index {
     this.llmPresetId = resolvedPresetId;
   }
 
+  private applyDialogProviderSelection(providerId: string, preferredPresetId: string): void {
+    let resolvedProvider = this.resolveProviderById(providerId);
+    let presetIds = this.listModelPresetIds(resolvedProvider);
+    let resolvedPresetId = presetIds.length > 0 ? presetIds[0] : '';
+    if (preferredPresetId.length > 0 && presetIds.indexOf(preferredPresetId) >= 0) {
+      resolvedPresetId = preferredPresetId;
+    }
+    this.dialogProviderId = resolvedProvider.providerId;
+    this.dialogAvailableModelPresetIds = presetIds.slice();
+    this.dialogPresetId = resolvedPresetId;
+  }
+
   private listModelPresetIds(provider: BuiltinModelProvider): string[] {
     let presetIds: string[] = [];
     for (let index = 0; index < provider.models.length; index++) {
       presetIds.push(provider.models[index].presetId);
     }
     return presetIds;
+  }
+
+  private openModelDialog(): void {
+    this.dialogApiKey = this.llmApiKey;
+    this.applyDialogProviderSelection(this.llmProviderId, this.llmPresetId);
+    this.showModelDialog = true;
+  }
+
+  private closeModelDialog(): void {
+    this.llmApiKey = this.dialogApiKey;
+    this.applyProviderSelection(this.dialogProviderId, this.dialogPresetId);
+    this.showModelDialog = false;
+    this.commitSettingsChange();
   }
 
   private async loadSettings(): Promise<void> {
@@ -826,6 +1069,17 @@ struct Index {
       llmStyle: this.llmStyle.trim().length > 0 ? this.llmStyle.trim() : createDefaultRuntimeSettings().llmStyle,
       defaultEntryMode: this.defaultEntryMode === 'voice' ? 'voice' : 'keyboard'
     };
+  }
+
+  private resolveMaskedApiKey(apiKey: string): string {
+    let normalized = apiKey.trim();
+    if (normalized.length === 0) {
+      return '未配置';
+    }
+    if (normalized.length <= 8) {
+      return `${normalized.substring(0, 2)}****`;
+    }
+    return `${normalized.substring(0, 4)}****${normalized.substring(normalized.length - 4)}`;
   }
 
   private async requestMicrophonePermission(): Promise<void> {
