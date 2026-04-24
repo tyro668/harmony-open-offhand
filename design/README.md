@@ -20,11 +20,13 @@
 8. [08-LLM后端服务设计.md](./08-LLM后端服务设计.md)
 9. [09-开发计划.md](./09-开发计划.md)
 10. [10-librime拼音引擎集成方案.md](./10-librime拼音引擎集成方案.md)
+11. [sensevoice/README.md](./sensevoice/README.md)
 
 配套样例：
 
 - `config/`：配置、子类型、策略、词库清单样例
 - `samples/`：拼音词库、英文词库、ASR 热词、用户词条样例
+- `sensevoice/`：sherpa-onnx SenseVoice 最小版端侧语音识别方案
 
 设计约束说明：
 

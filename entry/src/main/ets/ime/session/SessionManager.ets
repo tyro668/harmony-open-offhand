@@ -101,6 +101,7 @@ export class SessionManager {
       isReady: true,
       statusText: 'IME bootstrap ready',
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions()
     });
     this.syncNineKeyState(this.nineKeyEngine.reset());
@@ -257,6 +258,7 @@ export class SessionManager {
     keyboardStateStore.patch({
       statusText: `Settings updated via ${reason}`,
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       voiceEnabled: settings.enableVoice,
       polishEnabled: settings.enableCloudPolish
@@ -313,6 +315,7 @@ export class SessionManager {
     );
     keyboardStateStore.patch({
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       statusText: `Switched to ${this.currentSubtype.name}`
     });
@@ -342,6 +345,7 @@ export class SessionManager {
     }
     keyboardStateStore.patch({
       keyboardLayout: resolvedLayout,
+      punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       statusText: `Switched to ${this.describeKeyboardLayout(resolvedLayout)}`
     });
@@ -722,6 +726,7 @@ export class SessionManager {
       return;
     }
     try {
+      this.voiceCaptureService.setRuntimeContext(this.context);
       // 设置实时转写回调，录音过程中实时显示识别文字
       this.voiceCaptureService.setTranscriptListener((text: string): void => {
         keyboardStateStore.patch({
@@ -1276,6 +1281,7 @@ export class SessionManager {
       currentSubtypeId: this.currentSubtype.id,
       currentSubtypeName: this.currentSubtype.name,
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       voiceEnabled: this.activeCapabilities.voiceEnabled,
       polishEnabled: this.activeCapabilities.polishEnabled,
@@ -1944,6 +1950,19 @@ export class SessionManager {
     }
     return this.activeSessionContext !== undefined &&
       SecurityPolicy.isEmailOrUriPattern(this.activeSessionContext.inputPattern);
+  }
+
+  private resolveActivePunctuationMode(): string {
+    if (this.shouldUseEnglishEngine()) {
+      return 'en';
+    }
+    if (this.currentSubtype?.extra?.punctuationMode === 'en') {
+      return 'en';
+    }
+    if (this.currentSubtype?.language === 'en' || this.currentSubtype?.locale.startsWith('en')) {
+      return 'en';
+    }
+    return 'zh';
   }
 
   private shouldAutoCapitalizeEnglish(): boolean {

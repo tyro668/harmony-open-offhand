@@ -1,0 +1,10 @@
+{
+  "modelId": "sense-voice-zh-en-ja-ko-yue-2024-07-17-int8",
+  "runtime": "sherpa-onnx",
+  "modelType": "offline-sensevoice",
+  "language": ["zh", "en", "ja", "ko", "yue"],
+  "files": [
+    { "name": "model.int8.onnx" },
+    { "name": "tokens.txt" }
+  ]
+}

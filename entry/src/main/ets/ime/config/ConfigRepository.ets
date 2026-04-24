@@ -7,6 +7,7 @@ import {
   OffhandAppConfig,
   OffhandImeConfig,
   OffhandInputConfig,
+  OffhandLocalAsrConfig,
   OffhandLlmPolishConfig,
   OffhandPinyinConfig,
   OffhandPrivacyConfig,
@@ -269,9 +270,11 @@ function createDefaultConfig(): OffhandImeConfig {
     sampleRate: 16000,
     maxRecordSeconds: 45,
     requestTimeoutMs: 20000,
+    asrProvider: 'auto',
     asrEndpoint: '',
     autoInsertResult: false,
     autoPolishResult: true,
+    localAsr: createDefaultLocalAsrConfig(),
     mockTranscript: '这是一次语音输入示例'
   };
   let llmConfig: OffhandLlmPolishConfig = createDefaultLlmPolishConfig();
@@ -298,6 +301,12 @@ function applyRuntimeSettings(base: OffhandImeConfig, runtime: OffhandRuntimeSet
   merged.voice.autoInsertResult = runtime.autoInsertVoiceResult;
   merged.voice.autoPolishResult = runtime.autoPolishVoiceResult;
   merged.voice.asrEndpoint = runtime.asrEndpoint;
+  // When the user disables the system built-in ASR, force the end-side
+  // SenseVoice provider so VoiceCaptureService never attempts CoreSpeechKit
+  // initialization and never falls back to it at runtime.
+  if (!runtime.enableBuiltinAsr) {
+    merged.voice.asrProvider = 'sensevoice_local';
+  }
   merged.llmPolish.enabled = runtime.enableCloudPolish;
   merged.llmPolish.providerId = selection.provider.providerId;
   merged.llmPolish.providerName = selection.provider.providerName;
@@ -441,10 +450,12 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
       sampleRate: source.voice.sampleRate,
       maxRecordSeconds: source.voice.maxRecordSeconds,
       requestTimeoutMs: source.voice.requestTimeoutMs,
+      asrProvider: normalizeAsrProvider(source.voice.asrProvider),
       asrEndpoint: source.voice.asrEndpoint,
       apiKey: source.voice.apiKey,
       autoInsertResult: source.voice.autoInsertResult,
       autoPolishResult: source.voice.autoPolishResult,
+      localAsr: cloneLocalAsrConfig(source.voice.localAsr),
       mockTranscript: source.voice.mockTranscript
     },
     llmPolish: {
@@ -467,6 +478,72 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
       enablePersonalization: source.privacy.enablePersonalization
     }
   };
+}
+
+function createDefaultLocalAsrConfig(): OffhandLocalAsrConfig {
+  return {
+    enabled: true,
+    provider: 'sherpa-onnx',
+    modelId: 'sense-voice-zh-en-ja-ko-yue-2024-07-17-int8',
+    source: 'sensevoice_local',
+    language: ['zh', 'en', 'ja', 'ko', 'yue'],
+    captureSampleRate: 16000,
+    numThreads: 1,
+    lazyLoad: true,
+    releaseOnKeyboardHide: true,
+    partialEmitIntervalMs: 900,
+    decodingMethod: 'greedy_search',
+    maxActivePaths: 4,
+    endpoint: {
+      enabled: true,
+      rule1MinTrailingSilence: 2.4,
+      rule2MinTrailingSilence: 1.8,
+      rule3MinUtteranceLength: 20
+    }
+  };
+}
+
+function cloneLocalAsrConfig(source?: OffhandLocalAsrConfig): OffhandLocalAsrConfig {
+  let defaults = createDefaultLocalAsrConfig();
+  if (!source) {
+    return defaults;
+  }
+  let endpointSource = source.endpoint ? source.endpoint : defaults.endpoint;
+  return {
+    enabled: source.enabled !== undefined ? source.enabled : defaults.enabled,
+    provider: typeof source.provider === 'string' && source.provider.length > 0 ? source.provider : defaults.provider,
+    modelId: typeof source.modelId === 'string' && source.modelId.length > 0 ? source.modelId : defaults.modelId,
+    source: 'sensevoice_local',
+    language: Array.isArray(source.language) && source.language.length > 0 ? source.language.slice() : defaults.language,
+    captureSampleRate: typeof source.captureSampleRate === 'number' ? source.captureSampleRate : defaults.captureSampleRate,
+    numThreads: typeof source.numThreads === 'number' ? source.numThreads : defaults.numThreads,
+    lazyLoad: source.lazyLoad !== undefined ? source.lazyLoad : defaults.lazyLoad,
+    releaseOnKeyboardHide: source.releaseOnKeyboardHide !== undefined ?
+      source.releaseOnKeyboardHide : defaults.releaseOnKeyboardHide,
+    partialEmitIntervalMs: typeof source.partialEmitIntervalMs === 'number' ?
+      source.partialEmitIntervalMs : defaults.partialEmitIntervalMs,
+    decodingMethod: source.decodingMethod === 'modified_beam_search' ? 'modified_beam_search' : 'greedy_search',
+    maxActivePaths: typeof source.maxActivePaths === 'number' ? source.maxActivePaths : defaults.maxActivePaths,
+    endpoint: {
+      enabled: endpointSource.enabled !== undefined ? endpointSource.enabled : defaults.endpoint.enabled,
+      rule1MinTrailingSilence: typeof endpointSource.rule1MinTrailingSilence === 'number' ?
+        endpointSource.rule1MinTrailingSilence : defaults.endpoint.rule1MinTrailingSilence,
+      rule2MinTrailingSilence: typeof endpointSource.rule2MinTrailingSilence === 'number' ?
+        endpointSource.rule2MinTrailingSilence : defaults.endpoint.rule2MinTrailingSilence,
+      rule3MinUtteranceLength: typeof endpointSource.rule3MinUtteranceLength === 'number' ?
+        endpointSource.rule3MinUtteranceLength : defaults.endpoint.rule3MinUtteranceLength
+    }
+  };
+}
+
+function normalizeAsrProvider(raw: string | undefined): 'auto' | 'sensevoice_local' | 'builtin' | 'remote' {
+  if (raw === 'sensevoice_local' || raw === 'builtin' || raw === 'remote') {
+    return raw;
+  }
+  if (raw === 'zipformer_bilingual_local') {
+    return 'sensevoice_local';
+  }
+  return 'auto';
 }
 
 function cloneSubtype(source: OffhandSubtypeConfig): OffhandSubtypeConfig {

@@ -106,17 +106,17 @@ export class EnglishEngine {
     }
     let buffer = this.rawInput.toLowerCase();
     let words: string[] = [];
-    addUnique(words, this.formatWord(buffer, autoCapitalize));
+    addUnique(words, this.formatTypedWord(this.rawInput, autoCapitalize));
     for (let index = 0; index < COMMON_WORDS.length && words.length < MAX_CANDIDATES; index++) {
       let word = COMMON_WORDS[index];
       if (!word.startsWith(buffer)) {
         continue;
       }
-      addUnique(words, this.formatWord(word, autoCapitalize));
+      addUnique(words, this.formatSuggestedWord(word, autoCapitalize));
     }
     if (words.length < 2) {
-      addUnique(words, this.formatWord(`${buffer}s`, autoCapitalize));
-      addUnique(words, this.formatWord(`${buffer}ing`, autoCapitalize));
+      addUnique(words, this.formatSuggestedWord(`${buffer}s`, autoCapitalize));
+      addUnique(words, this.formatSuggestedWord(`${buffer}ing`, autoCapitalize));
     }
     let candidates: CandidateItem[] = [];
     for (let index = 0; index < words.length && index < MAX_CANDIDATES; index++) {
@@ -145,13 +145,30 @@ export class EnglishEngine {
     }
     return word[0].toUpperCase() + word.substring(1);
   }
+
+  private formatTypedWord(word: string, autoCapitalize: boolean): string {
+    if (hasUppercaseLetter(word)) {
+      return word;
+    }
+    return this.formatWord(word, autoCapitalize);
+  }
+
+  private formatSuggestedWord(word: string, autoCapitalize: boolean): string {
+    if (isAllUppercaseLetters(this.rawInput)) {
+      return word.toUpperCase();
+    }
+    if (startsWithUppercaseLetter(this.rawInput)) {
+      return word.length > 0 ? word[0].toUpperCase() + word.substring(1) : word;
+    }
+    return this.formatWord(word, autoCapitalize);
+  }
 }
 
 function normalizeCharacter(text: string): string {
   if (!/^[a-zA-Z]$/.test(text)) {
     return '';
   }
-  return text.toLowerCase();
+  return text;
 }
 
 function addUnique(target: string[], value: string): void {
@@ -162,4 +179,16 @@ function addUnique(target: string[], value: string): void {
     return;
   }
   target.push(value);
+}
+
+function hasUppercaseLetter(value: string): boolean {
+  return /[A-Z]/.test(value);
+}
+
+function isAllUppercaseLetters(value: string): boolean {
+  return /^[A-Z]+$/.test(value);
+}
+
+function startsWithUppercaseLetter(value: string): boolean {
+  return /^[A-Z]/.test(value);
 }

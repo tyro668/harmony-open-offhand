@@ -1,9 +1,15 @@
+import { common } from '@kit.AbilityKit';
 import audio from '@ohos.multimedia.audio';
 import type speechRecognizer from '@hms.ai.speechRecognizer';
 import { util } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { RemoteHttpClient } from '../network/RemoteHttpClient';
 import { OffhandVoiceConfig, VoiceRecognitionResult } from '../common/ImeTypes';
+import { AsrListener } from './AsrProvider';
+import {
+  resolveSenseVoiceCaptureSampleRate,
+  SenseVoiceLocalAsrProvider
+} from './SenseVoiceLocalAsrProvider';
 
 interface VoiceSessionState {
   active: boolean;
@@ -17,6 +23,14 @@ interface RemoteAsrPayload {
   sampleRate: number;
   audioBase64: string;
 }
+
+interface Pcm16FrameStats {
+  sampleCount: number;
+  rms: number;
+  peak: number;
+}
+
+type VoiceAsrProviderId = 'auto' | 'sensevoice_local' | 'builtin' | 'remote';
 
 const BUILTIN_ASR_FRAME_BYTES = 640;
 // HarmonyOS speechRecognizer 默认为 short-speech，单句 VAD 结束后引擎会停止接收音频。
@@ -74,6 +88,26 @@ class BuiltinAsrListenerAdapter implements speechRecognizer.RecognitionListener 
   }
 }
 
+class LocalAsrListenerAdapter implements AsrListener {
+  private readonly onTranscript: (text: string) => void;
+
+  constructor(onTranscript: (text: string) => void) {
+    this.onTranscript = onTranscript;
+  }
+
+  onPartial(text: string): void {
+    this.onTranscript(text);
+  }
+
+  onFinal(text: string): void {
+    this.onTranscript(text);
+  }
+
+  onError(message: string): void {
+    hilog.warn(0xFF10, 'VoiceCaptureService', 'local ASR callback error: %{public}s', message);
+  }
+}
+
 export class VoiceCaptureService {
   private capturer?: audio.AudioCapturer;
   private readonly httpClient: RemoteHttpClient = new RemoteHttpClient();
@@ -89,6 +123,9 @@ export class VoiceCaptureService {
   private asrFinalizedText: string = '';
   private asrSampleRate: number = 16000;
   private asrLanguage: string = '';
+  private runtimeContext?: common.Context;
+  private localAsrProvider?: SenseVoiceLocalAsrProvider;
+  private useLocalAsr: boolean = false;
   private useBuiltinAsr: boolean = false;
   private pendingBuiltinAudio: Uint8Array = new Uint8Array(0);
   private onTranscriptUpdate?: (text: string) => void;
@@ -97,6 +134,11 @@ export class VoiceCaptureService {
   // incoming audio frames can be written to the engine immediately.
   private asrListening: boolean = false;
   private asrRestartScheduled: boolean = false;
+  private capturedFrameCount: number = 0;
+  private capturedSampleCount: number = 0;
+  private captureStartedAtMs: number = 0;
+  private effectiveCaptureSampleRate: number = 16000;
+  private lastReadDataLogAtMs: number = 0;
 
   private readonly onReadData = (buffer: ArrayBuffer): void => {
     if (!this.state.active) {
@@ -118,7 +160,14 @@ export class VoiceCaptureService {
         }
       }
       let uint8Buffer = new Uint8Array(actualBuffer);
+      let frameStats = calculatePcm16FrameStats(uint8Buffer);
       this.state.chunks.push(uint8Buffer);
+      this.capturedFrameCount += 1;
+      this.capturedSampleCount += frameStats.sampleCount;
+      this.logReadDataStatsIfNeeded(uint8Buffer.byteLength, frameStats);
+      if (this.useLocalAsr && this.localAsrProvider) {
+        this.localAsrProvider.pushAudioFrame(uint8Buffer);
+      }
       if (this.useBuiltinAsr && this.asrEngine) {
         this.enqueueBuiltinAsrAudio(uint8Buffer);
       }
@@ -138,17 +187,30 @@ export class VoiceCaptureService {
     this.asrFinalizedText = '';
     this.asrListening = false;
     this.asrRestartScheduled = false;
+    this.capturedFrameCount = 0;
+    this.capturedSampleCount = 0;
+    this.captureStartedAtMs = 0;
+    this.lastReadDataLogAtMs = 0;
+    await this.shutdownLocalAsr();
     this.useBuiltinAsr = false;
     this.pendingBuiltinAudio = new Uint8Array(0);
 
-    let sampleRate = resolveSampleRate(config.sampleRate);
+    let providerId = resolveAsrProviderId(config.asrProvider);
+    if (providerId === 'remote' && config.asrEndpoint.length === 0) {
+      throw new Error('remote ASR selected but asrEndpoint is empty');
+    }
 
-    // 未配置远程 ASR 且当前语言为中文时，尝试使用系统内置 ASR。
+    await this.tryStartLocalAsr(config, locale, providerId);
+    let captureSampleRate = this.useLocalAsr ? resolveSenseVoiceCaptureSampleRate(config) : config.sampleRate;
+    let sampleRate = resolveSampleRate(captureSampleRate);
+    this.effectiveCaptureSampleRate = captureSampleRate;
+
+    // 自动/内置模式下当前语言为中文时，尝试使用系统内置 ASR。
     // 真机上 CoreSpeechKit 可能因设备/签名/服务状态等原因初始化失败，
     // 此处必须降级为"只采集 PCM + 最终走远程/mock 转写"，而不是直接
     // 抛错阻塞整个录音启动——否则 UI 永远进入不到 'recording' 状态，
     // 用户看到的就是"按大圆圈没有脉冲"。
-    if (config.asrEndpoint.length === 0 && this.isLocaleSupportedByBuiltinAsr(locale)) {
+    if (!this.useLocalAsr && this.shouldTryBuiltinAsr(providerId) && this.isLocaleSupportedByBuiltinAsr(locale)) {
       try {
         await this.initBuiltinAsr(config, locale);
         this.useBuiltinAsr = true;
@@ -159,25 +221,36 @@ export class VoiceCaptureService {
           'builtin ASR unavailable, falling back to audio-only capture: %{public}s', errorMsg);
         this.shutdownBuiltinAsr();
         this.useBuiltinAsr = false;
+        if (providerId === 'builtin') {
+          throw new Error(errorMsg);
+        }
       }
-    } else if (config.asrEndpoint.length === 0) {
+    } else if (!this.useLocalAsr && providerId === 'builtin') {
+      throw new Error(`builtin ASR does not support locale ${locale}`);
+    } else if (!this.useLocalAsr && providerId === 'auto' && config.asrEndpoint.length === 0) {
       hilog.info(0xFF10, 'VoiceCaptureService',
         'locale %{public}s not supported by builtin ASR, will use mock/remote', locale);
     }
 
     hilog.info(0xFF10, 'VoiceCaptureService',
-      'creating AudioCapturer with sampleRate=%{public}d', config.sampleRate);
+      'creating AudioCapturer with sampleRate=%{public}d local=%{public}s',
+      captureSampleRate, String(this.useLocalAsr));
     try {
       this.capturer = await this.createCapturerWithFallback(sampleRate);
+      this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(this.capturer, 'created'));
     } catch (error) {
       let errorMsg = (error as Error).message ?? String(error);
       hilog.error(0xFF10, 'VoiceCaptureService', 'createAudioCapturer failed: %{public}s', errorMsg);
       this.shutdownBuiltinAsr();
+      await this.shutdownLocalAsr();
       throw new Error(
         `音频录制初始化失败(${errorMsg})，鸿蒙模拟器不支持麦克风，请在真机上测试。`);
     }
     this.capturer.on('readData', this.onReadData);
     hilog.info(0xFF10, 'VoiceCaptureService', 'starting AudioCapturer...');
+    this.state.active = true;
+    this.state.startedAt = Date.now();
+    this.captureStartedAtMs = this.state.startedAt;
     try {
       await this.capturer.start();
     } catch (error) {
@@ -187,11 +260,12 @@ export class VoiceCaptureService {
       await this.capturer.release();
       this.capturer = undefined;
       this.shutdownBuiltinAsr();
+      await this.shutdownLocalAsr();
+      this.state.active = false;
       throw new Error(errorMsg);
     }
-    this.state.active = true;
-    this.state.startedAt = Date.now();
     hilog.info(0xFF10, 'VoiceCaptureService', 'AudioCapturer started successfully');
+    this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(this.capturer, 'started'));
   }
 
   async stop(config: OffhandVoiceConfig, locale: string): Promise<VoiceRecognitionResult> {
@@ -220,6 +294,21 @@ export class VoiceCaptureService {
     }
     this.capturer = undefined;
 
+    if (this.useLocalAsr && this.localAsrProvider) {
+      let provider = this.localAsrProvider;
+      this.useLocalAsr = false;
+      this.localAsrProvider = undefined;
+      try {
+        let result = await provider.stop(false);
+        this.resetChunks();
+        return result;
+      } catch (error) {
+        hilog.warn(0xFF10, 'VoiceCaptureService', 'local ASR stop failed: %{public}s',
+          (error as Error).message ?? String(error));
+        await provider.destroy();
+      }
+    }
+
     // 使用内置 ASR
     if (this.useBuiltinAsr && this.asrEngine) {
       try {
@@ -235,9 +324,11 @@ export class VoiceCaptureService {
     }
 
     // 远程 ASR 或 mock
+    let providerId = resolveAsrProviderId(config.asrProvider);
     let pcmData = mergeChunks(this.state.chunks);
     this.resetChunks();
-    if (config.asrEndpoint.length > 0 && pcmData.byteLength > 0) {
+    if ((providerId === 'auto' || providerId === 'remote') && config.asrEndpoint.length > 0 &&
+      pcmData.byteLength > 0) {
       try {
         let wavData = wrapPcmAsWav(pcmData, config.sampleRate, 1, 16);
         let payload: RemoteAsrPayload = {
@@ -260,6 +351,12 @@ export class VoiceCaptureService {
       } catch (_) {
       }
     }
+    if (providerId === 'remote') {
+      return {
+        text: '',
+        source: 'remote_asr'
+      };
+    }
     return {
       text: config.mockTranscript,
       source: 'mock'
@@ -281,8 +378,110 @@ export class VoiceCaptureService {
     this.onTranscriptUpdate = callback;
   }
 
+  setRuntimeContext(context?: common.Context): void {
+    this.runtimeContext = context;
+    this.localAsrProvider?.setContext(context);
+  }
+
   private resetChunks(): void {
     this.state.chunks = [];
+  }
+
+  private logReadDataStatsIfNeeded(chunkBytes: number, frameStats: Pcm16FrameStats): void {
+    let now = Date.now();
+    if (now - this.lastReadDataLogAtMs < 1000) {
+      return;
+    }
+    this.lastReadDataLogAtMs = now;
+    let elapsedMs = Math.max(1, now - this.captureStartedAtMs);
+    let estimatedHz = Math.round(this.capturedSampleCount * 1000 / elapsedMs);
+    hilog.info(0xFF10, 'VoiceCaptureService',
+      'captured audio frame count=%{public}d lastBytes=%{public}d sampleRate=%{public}d estimatedHz=%{public}d rms=%{public}d peak=%{public}d local=%{public}s builtin=%{public}s',
+      this.capturedFrameCount, chunkBytes, this.effectiveCaptureSampleRate, estimatedHz,
+      Math.round(frameStats.rms), frameStats.peak, String(this.useLocalAsr), String(this.useBuiltinAsr));
+  }
+
+  private logCapturerStreamInfo(capturer: audio.AudioCapturer, stage: string): number | undefined {
+    try {
+      let streamInfo = capturer.getStreamInfoSync();
+      let actualSampleRate = Number(streamInfo.samplingRate);
+      hilog.info(0xFF10, 'VoiceCaptureService',
+        'AudioCapturer %{public}s streamInfo sampleRate=%{public}d channels=%{public}d sampleFormat=%{public}d',
+        stage, actualSampleRate, streamInfo.channels, streamInfo.sampleFormat);
+      return actualSampleRate > 0 ? actualSampleRate : undefined;
+    } catch (error) {
+      hilog.warn(0xFF10, 'VoiceCaptureService',
+        'AudioCapturer %{public}s getStreamInfo failed: %{public}s',
+        stage, (error as Error).message ?? String(error));
+      return undefined;
+    }
+  }
+
+  private updateLocalAsrSampleRateIfNeeded(sampleRate?: number): void {
+    if (!this.useLocalAsr || !sampleRate) {
+      return;
+    }
+    if (sampleRate !== this.effectiveCaptureSampleRate) {
+      hilog.warn(0xFF10, 'VoiceCaptureService',
+        'local ASR capture sampleRate adjusted from %{public}d to %{public}d',
+        this.effectiveCaptureSampleRate, sampleRate);
+    }
+    this.effectiveCaptureSampleRate = sampleRate;
+    this.localAsrProvider?.setCaptureSampleRate(sampleRate);
+  }
+
+  private shouldTryBuiltinAsr(providerId: VoiceAsrProviderId): boolean {
+    return providerId === 'auto' || providerId === 'builtin';
+  }
+
+  private async tryStartLocalAsr(config: OffhandVoiceConfig, locale: string,
+    providerId: VoiceAsrProviderId): Promise<boolean> {
+    if (providerId !== 'auto' && providerId !== 'sensevoice_local') {
+      return false;
+    }
+    let provider = this.localAsrProvider ?? new SenseVoiceLocalAsrProvider(this.runtimeContext);
+    provider.setContext(this.runtimeContext);
+    this.localAsrProvider = provider;
+    let available = await provider.isAvailable(config, locale);
+    if (!available) {
+      let reason = provider.getUnavailableReason();
+      if (providerId === 'sensevoice_local') {
+        throw new Error(`local ASR unavailable: ${reason}`);
+      }
+      hilog.info(0xFF10, 'VoiceCaptureService', 'local ASR skipped: %{public}s', reason);
+      return false;
+    }
+    let listener: AsrListener = new LocalAsrListenerAdapter((text: string): void => {
+      this.onTranscriptUpdate?.(text);
+    });
+    try {
+      await provider.start(config, locale, listener);
+      this.useLocalAsr = true;
+      hilog.info(0xFF10, 'VoiceCaptureService', 'local SenseVoice ASR initialized for %{public}s', locale);
+      return true;
+    } catch (error) {
+      await provider.destroy();
+      this.useLocalAsr = false;
+      if (providerId === 'sensevoice_local') {
+        throw new Error((error as Error).message ?? String(error));
+      }
+      hilog.warn(0xFF10, 'VoiceCaptureService', 'local ASR start failed, falling back: %{public}s',
+        (error as Error).message ?? String(error));
+      return false;
+    }
+  }
+
+  private async shutdownLocalAsr(): Promise<void> {
+    if (!this.localAsrProvider) {
+      this.useLocalAsr = false;
+      return;
+    }
+    try {
+      await this.localAsrProvider.destroy();
+    } catch (_) {
+    }
+    this.localAsrProvider = undefined;
+    this.useLocalAsr = false;
   }
 
   private isLocaleSupportedByBuiltinAsr(locale: string): boolean {
@@ -612,6 +811,33 @@ export class VoiceCaptureService {
   }
 }
 
+function calculatePcm16FrameStats(frame: Uint8Array): Pcm16FrameStats {
+  let sampleCount = Math.floor(frame.byteLength / 2);
+  if (sampleCount === 0) {
+    return {
+      sampleCount: 0,
+      rms: 0,
+      peak: 0
+    };
+  }
+  let view = new DataView(frame.buffer, frame.byteOffset, sampleCount * 2);
+  let sumSquares = 0;
+  let peak = 0;
+  for (let index = 0; index < sampleCount; index++) {
+    let sample = view.getInt16(index * 2, true);
+    let absValue = Math.abs(sample);
+    if (absValue > peak) {
+      peak = absValue;
+    }
+    sumSquares += sample * sample;
+  }
+  return {
+    sampleCount: sampleCount,
+    rms: Math.sqrt(sumSquares / sampleCount),
+    peak: peak
+  };
+}
+
 function createAuthorizationHeaders(apiKey?: string): Record<string, string> | undefined {
   if (!apiKey || apiKey.length === 0) {
     return undefined;
@@ -675,6 +901,16 @@ function resolveSampleRate(sampleRate: number): audio.AudioSamplingRate {
     default:
       return audio.AudioSamplingRate.SAMPLE_RATE_16000;
   }
+}
+
+function resolveAsrProviderId(raw: string | undefined): VoiceAsrProviderId {
+  if (raw === 'sensevoice_local' || raw === 'builtin' || raw === 'remote') {
+    return raw;
+  }
+  if (raw === 'zipformer_bilingual_local') {
+    return 'sensevoice_local';
+  }
+  return 'auto';
 }
 
 function wrapPcmAsWav(pcmData: Uint8Array, sampleRate: number, channels: number, bitsPerSample: number): ArrayBuffer {

@@ -432,6 +432,7 @@ export function createDefaultRuntimeSettings(): OffhandRuntimeSettings {
   return {
     enablePreviewText: true,
     enableVoice: true,
+    enableBuiltinAsr: true,
     enableCloudPolish: true,
     enablePersonalization: true,
     autoInsertVoiceResult: false,
@@ -450,6 +451,7 @@ export function cloneRuntimeSettings(source: OffhandRuntimeSettings): OffhandRun
   return {
     enablePreviewText: source.enablePreviewText,
     enableVoice: source.enableVoice,
+    enableBuiltinAsr: source.enableBuiltinAsr,
     enableCloudPolish: source.enableCloudPolish,
     enablePersonalization: source.enablePersonalization,
     autoInsertVoiceResult: source.autoInsertVoiceResult,
@@ -529,6 +531,7 @@ function normalizeRuntimeSettings(raw: string): OffhandRuntimeSettings {
     return {
       enablePreviewText: parsed.enablePreviewText !== undefined ? parsed.enablePreviewText : defaults.enablePreviewText,
       enableVoice: parsed.enableVoice !== undefined ? parsed.enableVoice : defaults.enableVoice,
+      enableBuiltinAsr: parsed.enableBuiltinAsr !== undefined ? parsed.enableBuiltinAsr : defaults.enableBuiltinAsr,
       enableCloudPolish: parsed.enableCloudPolish !== undefined ? parsed.enableCloudPolish : defaults.enableCloudPolish,
       enablePersonalization: parsed.enablePersonalization !== undefined ?
         parsed.enablePersonalization : defaults.enablePersonalization,

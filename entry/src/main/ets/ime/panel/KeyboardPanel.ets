@@ -22,15 +22,18 @@ const LETTER_ROW_MIDDLE: string[] = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'
 const LETTER_ROW_BOTTOM: string[] = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
 const SIDE_PUNCTUATIONS: string[] = ['，', '。', '？', '！'];
 const COMMON_SYMBOLS: string[] = ['，', '。', '？', '！', '@', '#', '/', '-', '_', ':', ';', '(', ')'];
-// Candidate strip and feature row must share the same height so the
-// keyboard body does not shift vertically when candidates show up. The
-// strip overlays the toolbar position 1:1.
+const SYMBOL_CATEGORY_KEYS: string[] = ['{', '}', '《', '》'];
+// Keep the tool bar at the original fixed height; preedit/candidates are
+// rendered as a temporary floating layer above it so keyboard height stays
+// stable while typing.
 const FEATURE_ROW_HEIGHT: number = 40;
 const TOP_ACCESSORY_HEIGHT: number = FEATURE_ROW_HEIGHT;
+const PANEL_TOP_PADDING: number = 4;
+const CANDIDATE_TOOLBAR_OVERLAY_HEIGHT: number = FEATURE_ROW_HEIGHT;
 // iOS-style T9 keys: tighter corner radius gives a flatter, more grid-aligned
 // look than the previous 18 which made keys feel floaty and slightly
 // misaligned with neighbors.
-const T9_KEY_RADIUS: number = 10;
+const T9_KEY_RADIUS: number = 8;
 
 interface NineGridKeyDescriptor {
   digit: string;
@@ -43,6 +46,16 @@ interface QwertyKeyDescriptor {
   hint: string;
   label: string;
   value: string;
+}
+
+type SymbolKeyRole = 'text' | 'more' | 'backspace' | 'return' | 'space' | 'enter';
+
+interface SymbolKeyDescriptor {
+  label: string;
+  output: string;
+  role: SymbolKeyRole;
+  weight: number;
+  gray: boolean;
 }
 
 const NINE_GRID_ROWS: NineGridKeyDescriptor[][] = [
@@ -98,6 +111,67 @@ const QWERTY_BOTTOM_KEYS: QwertyKeyDescriptor[] = [
   { hint: '`', label: 'M', value: 'm' }
 ];
 
+const SYMBOL_DIGIT_ROW: SymbolKeyDescriptor[] = [
+  { label: '1', output: '1', role: 'text', weight: 1, gray: false },
+  { label: '2', output: '2', role: 'text', weight: 1, gray: false },
+  { label: '3', output: '3', role: 'text', weight: 1, gray: false },
+  { label: '4', output: '4', role: 'text', weight: 1, gray: false },
+  { label: '5', output: '5', role: 'text', weight: 1, gray: false },
+  { label: '6', output: '6', role: 'text', weight: 1, gray: false },
+  { label: '7', output: '7', role: 'text', weight: 1, gray: false },
+  { label: '8', output: '8', role: 'text', weight: 1, gray: false },
+  { label: '9', output: '9', role: 'text', weight: 1, gray: false },
+  { label: '0', output: '0', role: 'text', weight: 1, gray: false }
+];
+
+const SYMBOL_PRIMARY_ROW_2: SymbolKeyDescriptor[] = [
+  { label: '-', output: '-', role: 'text', weight: 1, gray: false },
+  { label: '/', output: '/', role: 'text', weight: 1, gray: false },
+  { label: ':', output: ':', role: 'text', weight: 1, gray: false },
+  { label: ';', output: ';', role: 'text', weight: 1, gray: false },
+  { label: '(', output: '(', role: 'text', weight: 1, gray: false },
+  { label: ')', output: ')', role: 'text', weight: 1, gray: false },
+  { label: '—', output: '—', role: 'text', weight: 1, gray: false },
+  { label: '“', output: '“', role: 'text', weight: 1, gray: false },
+  { label: '”', output: '”', role: 'text', weight: 1, gray: false }
+];
+
+const SYMBOL_PRIMARY_ROW_3: SymbolKeyDescriptor[] = [
+  { label: '更多', output: '', role: 'more', weight: 1.35, gray: true },
+  { label: '@', output: '@', role: 'text', weight: 1, gray: false },
+  { label: '…', output: '…', role: 'text', weight: 1, gray: false },
+  { label: '~', output: '~', role: 'text', weight: 1, gray: false },
+  { label: '、', output: '、', role: 'text', weight: 1, gray: false },
+  { label: '?', output: '?', role: 'text', weight: 1, gray: false },
+  { label: '!', output: '!', role: 'text', weight: 1, gray: false },
+  { label: '.', output: '.', role: 'text', weight: 1, gray: false },
+  { label: '⌫', output: '', role: 'backspace', weight: 1.35, gray: true }
+];
+
+const SYMBOL_MORE_ROW_2: SymbolKeyDescriptor[] = [
+  { label: '[', output: '[', role: 'text', weight: 1, gray: false },
+  { label: ']', output: ']', role: 'text', weight: 1, gray: false },
+  { label: '<', output: '<', role: 'text', weight: 1, gray: false },
+  { label: '>', output: '>', role: 'text', weight: 1, gray: false },
+  { label: '#', output: '#', role: 'text', weight: 1, gray: false },
+  { label: '%', output: '%', role: 'text', weight: 1, gray: false },
+  { label: '+', output: '+', role: 'text', weight: 1, gray: false },
+  { label: '=', output: '=', role: 'text', weight: 1, gray: false },
+  { label: '*', output: '*', role: 'text', weight: 1, gray: false }
+];
+
+const SYMBOL_MORE_ROW_3: SymbolKeyDescriptor[] = [
+  { label: '常用', output: '', role: 'more', weight: 1.35, gray: true },
+  { label: '&', output: '&', role: 'text', weight: 1, gray: false },
+  { label: '_', output: '_', role: 'text', weight: 1, gray: false },
+  { label: '\\', output: '\\', role: 'text', weight: 1, gray: false },
+  { label: '|', output: '|', role: 'text', weight: 1, gray: false },
+  { label: '¥', output: '¥', role: 'text', weight: 1, gray: false },
+  { label: '$', output: '$', role: 'text', weight: 1, gray: false },
+  { label: '€', output: '€', role: 'text', weight: 1, gray: false },
+  { label: '⌫', output: '', role: 'backspace', weight: 1.35, gray: true }
+];
+
 @Entry
 @Component
 struct KeyboardPanel {
@@ -105,6 +179,8 @@ struct KeyboardPanel {
   @State private showSettingsTray: boolean = false;
   @State private activeSettingsTab: string = 'input';
   @State private showSymbolPalette: boolean = false;
+  @State private showSymbolKeyboard: boolean = false;
+  @State private symbolKeyboardMorePage: boolean = false;
   @State private qwertyShiftEnabled: boolean = false;
   // Pulse ring state for the voice waiting circle. `voicePulseExpanded`
   // toggles every PULSE_INTERVAL_MS so the outer rings animate out/in
@@ -119,11 +195,20 @@ struct KeyboardPanel {
   @State private llmApiKeyRevealed: boolean = false;
   @State private llmSaveStatus: string = '';
   @State private runtimeEnableVoice: boolean = true;
+  @State private runtimeEnableBuiltinAsr: boolean = true;
   @State private runtimeEnableCloudPolish: boolean = true;
   @State private runtimeAutoPolishVoiceResult: boolean = true;
   @State private runtimeSaveStatus: string = '';
   private voicePulseTimer?: number;
+  private qwertyLongPressSuppressTimer?: number;
+  private suppressNextQwertyLetterClick: boolean = false;
   private unsubscribe?: () => void;
+  private lastNonVoiceSubtypeId: string = 'zh-Hans-pinyin';
+  private lastNonVoiceKeyboardLayout: KeyboardLayoutId = 'qwerty_26';
+  private lastChineseSubtypeId: string = 'zh-Hans-pinyin';
+  private lastChineseKeyboardLayout: KeyboardLayoutId = 'qwerty_26';
+  private lastEnglishSubtypeId: string = 'en-US-qwerty';
+  private lastEnglishKeyboardLayout: KeyboardLayoutId = 'qwerty_26';
 
   // @Styles methods can only include universal attributes and are state-less;
   // we express the pressed state as a darker background so Column-based keys
@@ -139,12 +224,30 @@ struct KeyboardPanel {
   aboutToAppear(): void {
     this.unsubscribe = keyboardStateStore.subscribe((state: KeyboardUiState): void => {
       this.uiState = state;
+      if (state.keyboardLayout !== 'voice_panel') {
+        this.lastNonVoiceSubtypeId = state.currentSubtypeId;
+        this.lastNonVoiceKeyboardLayout = state.keyboardLayout;
+        if (state.currentSubtypeId.startsWith('zh-') && state.currentSubtypeId !== 'zh-CN-voice') {
+          this.lastChineseSubtypeId = state.currentSubtypeId;
+          this.lastChineseKeyboardLayout = state.keyboardLayout;
+        }
+        if (state.currentSubtypeId.startsWith('en-')) {
+          this.lastEnglishSubtypeId = state.currentSubtypeId;
+          this.lastEnglishKeyboardLayout = state.keyboardLayout;
+        }
+      }
       if (!state.sessionActive) {
         if (!this.showSettingsTray) {
           this.showSymbolPalette = false;
+          this.showSymbolKeyboard = false;
+          this.symbolKeyboardMorePage = false;
           this.activeSettingsTab = 'input';
         }
         this.qwertyShiftEnabled = false;
+      }
+      if (state.keyboardLayout === 'voice_panel') {
+        this.showSymbolKeyboard = false;
+        this.symbolKeyboardMorePage = false;
       }
       if (state.keyboardLayout !== 'qwerty_26') {
         this.qwertyShiftEnabled = false;
@@ -160,6 +263,7 @@ struct KeyboardPanel {
       this.unsubscribe = undefined;
     }
     this.stopVoicePulseAnimation();
+    this.clearQwertyLongPressSuppressTimer();
   }
 
   private syncVoicePulseAnimation(state: KeyboardUiState): void {
@@ -196,33 +300,49 @@ struct KeyboardPanel {
     this.voicePulseExpanded = false;
   }
 
-  build() {
-    Stack() {
-      if (!this.showSettingsTray) {
-        Column({ space: 2 }) {
-          this.renderTopAccessoryArea()
-          this.renderVoiceDraftCard()
-          this.renderPolishSuggestionStrip()
+  private clearQwertyLongPressSuppressTimer(): void {
+    if (this.qwertyLongPressSuppressTimer !== undefined) {
+      clearTimeout(this.qwertyLongPressSuppressTimer);
+      this.qwertyLongPressSuppressTimer = undefined;
+    }
+  }
 
-          if (this.uiState.keyboardLayout === 'voice_panel') {
-            this.renderVoicePanel();
-          } else if (this.uiState.keyboardLayout === 't9_9') {
-            this.renderReferenceNineKeyKeyboard();
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (!this.showSettingsTray) {
+        Column({ space: 0 }) {
+          this.renderTopAccessoryArea()
+
+          if (this.showSymbolKeyboard) {
+            this.renderReferenceSymbolKeyboard();
           } else {
-            this.renderReferenceQwertyKeyboard();
+            this.renderVoiceDraftCard()
+            this.renderPolishSuggestionStrip()
+
+            if (this.uiState.keyboardLayout === 'voice_panel') {
+              this.renderVoicePanel();
+            } else if (this.uiState.keyboardLayout === 't9_9') {
+              this.renderReferenceNineKeyKeyboard();
+            } else {
+              this.renderReferenceQwertyKeyboard();
+            }
           }
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 8, right: 8, top: 4, bottom: 0 })
+        .padding({ left: 8, right: 8, top: PANEL_TOP_PADDING, bottom: 0 })
         .backgroundColor('#D9DCE2')
+
+        if (!this.showSymbolKeyboard && this.shouldShowCandidateStrip()) {
+          this.renderCandidateToolbarOverlay()
+        }
       } else {
         Column({ space: 0 }) {
           this.renderSettingsOverlay()
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 8, right: 8, top: 4, bottom: 0 })
+        .padding({ left: 8, right: 8, top: PANEL_TOP_PADDING, bottom: 0 })
         .backgroundColor('#D9DCE2')
         .zIndex(10)
       }
@@ -235,14 +355,14 @@ struct KeyboardPanel {
   @Builder
   private renderTopAccessoryArea() {
     Column() {
-      if (this.shouldShowCandidateStrip()) {
-        this.renderCandidateOrSymbolStrip()
+      if (this.showSymbolKeyboard) {
+        this.renderSymbolKeyboardHeader()
       } else {
         this.renderFeatureRow()
       }
     }
     .width('100%')
-    .height(FEATURE_ROW_HEIGHT)
+    .height(TOP_ACCESSORY_HEIGHT)
     .justifyContent(FlexAlign.Center)
   }
 
@@ -355,25 +475,16 @@ struct KeyboardPanel {
 
   @Builder
   private renderFeatureRow() {
-    // Top feature bar matches the reference mockup: magic/AI entry point on
-    // the far left, the T-shirt style switcher in the center, and the
-    // smile-emoji / divider / chevron cluster on the right. The mic toggle
-    // is intentionally not exposed here — voice is still reachable through
-    // the dedicated mic key in the keyboard body, which keeps the top bar
-    // uncluttered and in parity with the reference design.
+    // Top feature bar exposes a direct voice/keyboard mode toggle on the
+    // right. The icon follows the active mode: keyboard icon inside the
+    // voice panel, mic icon inside regular keyboard mode.
     Row() {
-      this.renderFeatureIconAssetButton('magic', (): void => {
+      this.renderFeatureIconAssetButton('gear', (): void => {
         this.toggleSettingsOverlay();
       }, this.showSettingsTray)
 
-      this.renderFeatureIconAssetButton('style', (): void => {
-        this.toggleReferenceLayoutStyle();
-      }, false, this.supportsNineKey() || this.supportsTwentySixKey())
-
       Row({ space: 10 }) {
-        this.renderFeatureIconAssetButton('smile', (): void => {
-          this.showSymbolPalette = !this.showSymbolPalette;
-        }, this.showSymbolPalette)
+        this.renderInputModeFeatureButton()
 
         Column()
           .width(1)
@@ -389,6 +500,7 @@ struct KeyboardPanel {
     .width('100%')
     .justifyContent(FlexAlign.SpaceBetween)
     .alignItems(VerticalAlign.Center)
+    .height(FEATURE_ROW_HEIGHT)
     .padding({ left: 8, right: 8, top: 0, bottom: 0 })
   }
 
@@ -504,6 +616,16 @@ struct KeyboardPanel {
           false
         )
         this.renderRuntimeToggleRow(
+          '系统内置语音识别',
+          this.runtimeEnableBuiltinAsr,
+          (next: boolean): void => {
+            this.runtimeEnableBuiltinAsr = next;
+            this.persistRuntimeSettings(next ? '已启用系统内置语音识别' : '已关闭系统内置语音识别，使用端侧 SenseVoice');
+          },
+          this.runtimeEnableVoice,
+          true
+        )
+        this.renderRuntimeToggleRow(
           '文本润色',
           this.runtimeEnableCloudPolish,
           (next: boolean): void => {
@@ -583,14 +705,9 @@ struct KeyboardPanel {
       Row({ space: 12 }) {
         this.renderSettingsTile('拼', '中文', (): void => {
           this.switchSettingsSubtype('zh-Hans-pinyin');
-          if (this.supportsTwentySixKey()) {
-            void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
-          }
-          this.closeSettingsOverlay();
         }, !this.isEnglishSubtype() && this.uiState.keyboardLayout !== 'voice_panel')
         this.renderSettingsTile('EN', 'English', (): void => {
           this.switchSettingsSubtype('en-US-qwerty');
-          this.closeSettingsOverlay();
         }, this.isEnglishSubtype())
         this.renderSettingsTile('voice', '语音', (): void => {
           if (!this.runtimeEnableVoice) {
@@ -987,6 +1104,7 @@ struct KeyboardPanel {
     }
     let runtime: OffhandRuntimeSettings = session.getRuntimeSettingsSnapshot();
     this.runtimeEnableVoice = runtime.enableVoice;
+    this.runtimeEnableBuiltinAsr = runtime.enableBuiltinAsr;
     this.runtimeEnableCloudPolish = runtime.enableCloudPolish;
     this.runtimeAutoPolishVoiceResult = runtime.autoPolishVoiceResult;
     this.runtimeSaveStatus = '';
@@ -1016,6 +1134,7 @@ struct KeyboardPanel {
     }
     let runtime: OffhandRuntimeSettings = session.getRuntimeSettingsSnapshot();
     runtime.enableVoice = this.runtimeEnableVoice;
+    runtime.enableBuiltinAsr = this.runtimeEnableBuiltinAsr;
     runtime.enableCloudPolish = this.runtimeEnableCloudPolish;
     runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
     this.runtimeSaveStatus = '保存中…';
@@ -1094,8 +1213,8 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderCandidateOrSymbolStrip() {
-    Column({ space: 8 }) {
+  private renderCandidateToolbarOverlay() {
+    Column({ space: 0 }) {
       if (this.showSymbolPalette) {
         Scroll() {
           Row({ space: 10 }) {
@@ -1117,57 +1236,64 @@ struct KeyboardPanel {
         }
         .scrollable(ScrollDirection.Horizontal)
         .width('100%')
-        .height(28)
+        .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
       } else {
-        Row({ space: 8 }) {
-          Text('‹')
-            .fontSize(14)
-            .fontColor(this.uiState.hasPreviousCandidatePage ? '#7A7C84' : '#CCCCCC')
-            .width(22)
-            .textAlign(TextAlign.Center)
-            .onClick(() => {
-              if (this.uiState.hasPreviousCandidatePage) {
-                void imeRuntime.getSessionManager()?.pageCandidateBackward();
-              }
-            })
+        Row({ space: 10 }) {
+          if (this.resolveCandidatePreeditText().length > 0) {
+            Text(this.resolveCandidatePreeditText())
+              .fontSize(15)
+              .fontWeight(FontWeight.Normal)
+              .fontColor('#111214')
+              .height(34)
+              .padding({ left: 12, right: 12 })
+              .backgroundColor('#FFFFFF')
+              .border({ width: 1, color: '#F6F7F9' })
+              .borderRadius(9)
+              .maxLines(1)
+              .constraintSize({ maxWidth: 108 })
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
 
           Scroll() {
-            Row({ space: 18 }) {
+            Row({ space: 22 }) {
               if (this.uiState.candidates.length === 0) {
-                Text(this.uiState.preedit.length > 0 ? this.uiState.preedit :
-                  (this.uiState.activeNineKeySpelling.length > 0 ? this.uiState.activeNineKeySpelling :
-                    this.resolveCandidatePlaceholder()))
-                  .fontSize(13)
-                  .fontColor(this.uiState.preedit.length > 0 ? '#2B2B2D' : '#9A9CA3')
+                Text(this.resolveCandidatePlaceholder())
+                  .fontSize(15)
+                  .fontWeight(FontWeight.Normal)
+                  .fontColor('#8C9098')
                   .maxLines(1)
               } else {
                 ForEach(this.uiState.candidates, (candidate: CandidateItem) => {
                   Text(candidate.text)
-                    .fontSize(14)
-                    .fontColor(candidate.highlighted ? '#1677FF' : '#2B2B2D')
-                    .fontWeight(candidate.highlighted ? FontWeight.Bold : FontWeight.Normal)
+                    .fontSize(15)
+                    .fontWeight(FontWeight.Normal)
+                    .fontColor(candidate.index === 0 ? '#1677FF' : '#111214')
+                    .height(34)
+                    .padding({ left: candidate.index === 0 ? 14 : 0, right: candidate.index === 0 ? 14 : 0 })
+                    .backgroundColor(candidate.index === 0 ? '#FFFFFF' : 'rgba(0,0,0,0)')
+                    .borderRadius(9)
                     .maxLines(1)
-                    .constraintSize({ maxWidth: 64 })
+                    .constraintSize({ maxWidth: 92 })
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .onClick(() => {
                       void imeRuntime.getSessionManager()?.selectCandidate(candidate.index);
                     })
-                  // Key MUST include candidate.text: rime's candidate index/label
-                  // are always 0..N/"1".."N" per page, so two different pinyin
-                  // buffers can yield the same key triple and ArkTS would
-                  // reuse the Text node without refreshing, making the
-                  // candidate strip look stale across keystrokes.
                 }, (candidate: CandidateItem): string => `${candidate.index}-${candidate.label}-${candidate.text}`)
               }
             }
+            .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
+            .alignItems(VerticalAlign.Center)
           }
           .scrollable(ScrollDirection.Horizontal)
           .layoutWeight(1)
-          .height(24)
+          .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
 
           Text('›')
-            .fontSize(14)
-            .fontColor(this.uiState.hasNextCandidatePage ? '#4B4D55' : '#CCCCCC')
-            .width(22)
+            .fontSize(28)
+            .fontWeight(FontWeight.Normal)
+            .fontColor(this.uiState.hasNextCandidatePage ? '#5F636C' : '#8C9098')
+            .width(28)
+            .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
             .textAlign(TextAlign.Center)
             .onClick(() => {
               if (this.uiState.hasNextCandidatePage) {
@@ -1176,32 +1302,17 @@ struct KeyboardPanel {
             })
         }
         .width('100%')
-        .height(24)
+        .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
 
-        if (this.uiState.nineKeySpellings.length > 0) {
-          Row({ space: 6 }) {
-            ForEach(this.uiState.nineKeySpellings, (spelling: string) => {
-              Text(spelling)
-                .fontSize(10)
-                .fontColor(spelling === this.uiState.activeNineKeySpelling ? '#FFFFFF' : '#666A72')
-                .padding({ left: 7, right: 7, top: 3, bottom: 3 })
-                .backgroundColor(spelling === this.uiState.activeNineKeySpelling ? '#1677FF' : '#EEF0F4')
-                .borderRadius(12)
-                .onClick(() => {
-                  if (spelling !== this.uiState.activeNineKeySpelling) {
-                    void imeRuntime.getSessionManager()?.selectNineKeySpelling(spelling);
-                  }
-                })
-            }, (spelling: string): string => spelling)
-          }
-          .width('100%')
-        }
       }
     }
     .width('100%')
-    .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-    .backgroundColor('#FFFFFF')
-    .borderRadius(18)
+    .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
+    .padding({ left: 24, right: 18, top: 0, bottom: 0 })
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor('#D9DCE2')
+    .position({ x: 0, y: PANEL_TOP_PADDING })
+    .zIndex(8)
   }
 
   @Builder
@@ -1344,24 +1455,24 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceNineKeyKeyboard() {
-    Row({ space: 6 }) {
-      Column({ space: 6 }) {
+    Row({ space: 4 }) {
+      Column({ space: 4 }) {
         this.renderPunctuationRail()
 
         // Weight has no effect on horizontal size inside a vertical Column;
         // the button fills the 70px column width via width('100%') in the
         // builder. Keep weight=1 to document "single child takes natural row".
-        this.renderBottomActionKey('符号', this.showSymbolPalette, (): void => {
-          this.showSymbolPalette = !this.showSymbolPalette;
+        this.renderBottomActionKey('符号', this.showSymbolKeyboard, (): void => {
+          this.openSymbolKeyboard();
         }, true, 1)
       }
       .width(70)
       .height(this.resolveReferenceNineKeyHeight())
 
-      Column({ space: 6 }) {
-        Column({ space: 6 }) {
+      Column({ space: 4 }) {
+        Column({ space: 4 }) {
           ForEach(NINE_GRID_ROWS, (row: NineGridKeyDescriptor[]) => {
-            Row({ space: 6 }) {
+            Row({ space: 4 }) {
               ForEach(row, (descriptor: NineGridKeyDescriptor) => {
                 this.renderNineGridKey(descriptor)
               }, (descriptor: NineGridKeyDescriptor): string => `${descriptor.digit}-${descriptor.label}`)
@@ -1373,7 +1484,7 @@ struct KeyboardPanel {
         .width('100%')
         .height(this.resolveReferenceNineKeyGridHeight())
 
-        Row({ space: 6 }) {
+        Row({ space: 4 }) {
           // Use strict 1:1:1 layout weights so the three bottom keys line up
           // pixel-perfectly with the three grid columns above: 中/英 under
           // column 1 (分词), 0/mic under column 2 (ABC), and 123 under column 3
@@ -1396,7 +1507,7 @@ struct KeyboardPanel {
       .layoutWeight(1)
       .height(this.resolveReferenceNineKeyHeight())
 
-      Column({ space: 6 }) {
+      Column({ space: 4 }) {
         this.renderSideActionKey('⌫', (): void => {
           void imeRuntime.getSessionManager()?.pressBackspace();
         })
@@ -1419,14 +1530,12 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertyKeyboard() {
-    // All four rows use layoutWeight sums that add up to 10 with `space: 6`
-    // gaps, so every row renders with identical overall width and each
-    // letter-weight-unit is (rowInnerWidth - gapsTotal) / 10 pixels wide.
-    // That way letter keys across rows line up visually despite each row
-    // having different numbers of children.
-    Column({ space: 4 }) {
+    // All four rows use layoutWeight sums that add up to 10 with tighter
+    // horizontal gaps, so every row renders with identical overall width and
+    // each letter-weight-unit scales consistently.
+    Column({ space: 3 }) {
       // Row 1 — 10 letter keys (Q..P), weight 1 each; 9 gaps.
-      Row({ space: 5 }) {
+      Row({ space: 3 }) {
         ForEach(QWERTY_TOP_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
         }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
@@ -1437,7 +1546,7 @@ struct KeyboardPanel {
       // each side, so letters sit offset from Row 1 the way iOS renders it.
       // Blank() (empty Column) + layoutWeight(0.5) gives a pixel-scaled
       // indent that tracks the panel width instead of a fixed pad.
-      Row({ space: 5 }) {
+      Row({ space: 3 }) {
         Column().layoutWeight(0.5)
         ForEach(QWERTY_MIDDLE_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
@@ -1447,7 +1556,7 @@ struct KeyboardPanel {
       .width('100%')
 
       // Row 3 — ⇧ (weight 1.5) + 7 letters (weight 1) + ⌫ (weight 1.5) = 10.
-      Row({ space: 5 }) {
+      Row({ space: 3 }) {
         this.renderReferenceQwertySideKey('⇧', (): void => {
           this.qwertyShiftEnabled = !this.qwertyShiftEnabled;
         }, this.qwertyShiftEnabled, 1.5)
@@ -1462,14 +1571,14 @@ struct KeyboardPanel {
       }
       .width('100%')
 
-      // Row 4 — 符号(1.8) 中/英(1.1) !,(0.8) mic(2.5) ?.(0.8) 123(1.1) 完成(1.8)
+      // Row 4 — 符号(1.8) 中/英(1.1) !,(0.8) 空格(2.5) ?.(0.8) 123(1.1) 完成(1.8)
       // = 9.9 total, visually matching the reference proportion where 符号 /
-      // 完成 are the wide left/right anchors and mic is the space-bar-style
-      // central key.
-      Row({ space: 5 }) {
+      // 完成 are the wide left/right anchors and the central space key spans
+      // about 2.5 letter-key widths.
+      Row({ space: 3 }) {
         this.renderReferenceQwertyBottomActionKey('符号', (): void => {
-          this.showSymbolPalette = !this.showSymbolPalette;
-        }, this.showSymbolPalette, 1.8)
+          this.openSymbolKeyboard();
+        }, this.showSymbolKeyboard, 1.8)
 
         this.renderReferenceQwertyBottomActionKey(this.resolveQuickSwitchLabel(), (): void => {
           this.switchQuickSubtype();
@@ -1479,7 +1588,7 @@ struct KeyboardPanel {
           void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyCommaOutput());
         }, 0.8)
 
-        this.renderReferenceQwertyVoiceKey(2.5)
+        this.renderReferenceQwertySpaceKey(2.5)
 
         this.renderReferenceQwertyPunctuationKey(this.resolveQwertyPeriodLabel(), (): void => {
           void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyPeriodOutput());
@@ -1500,6 +1609,145 @@ struct KeyboardPanel {
     .width('100%')
     .height(this.resolveReferenceQwertyHeight())
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+  }
+
+  @Builder
+  private renderReferenceSymbolKeyboard() {
+    Column({ space: 7 }) {
+      this.renderSymbolKeyRow(SYMBOL_DIGIT_ROW)
+
+      if (this.symbolKeyboardMorePage) {
+        this.renderSymbolKeyRow(SYMBOL_MORE_ROW_2)
+        this.renderSymbolKeyRow(SYMBOL_MORE_ROW_3)
+      } else {
+        this.renderSymbolKeyRow(SYMBOL_PRIMARY_ROW_2)
+        this.renderSymbolKeyRow(SYMBOL_PRIMARY_ROW_3)
+      }
+
+      this.renderSymbolKeyboardBottomRow()
+    }
+    .width('100%')
+    .height(this.resolveReferenceQwertyHeight())
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+  }
+
+  @Builder
+  private renderSymbolKeyboardHeader() {
+    Row() {
+      Row({ space: 34 }) {
+        ForEach(SYMBOL_CATEGORY_KEYS, (symbol: string) => {
+          Text(symbol)
+            .fontSize(15)
+            .fontWeight(FontWeight.Normal)
+            .fontColor('#16171B')
+            .textAlign(TextAlign.Center)
+            .width(36)
+            .height(34)
+            .onClick(() => {
+              this.insertSymbolText(symbol);
+            })
+        }, (symbol: string): string => symbol)
+      }
+      .layoutWeight(1)
+      .height(36)
+      .padding({ left: 22 })
+      .alignItems(VerticalAlign.Center)
+
+      Button() {
+        Text('×')
+          .fontSize(15)
+          .fontWeight(FontWeight.Normal)
+          .fontColor('#64676F')
+      }
+      .width(34)
+      .height(34)
+      .backgroundColor('rgba(0,0,0,0)')
+      .border({ width: 2, color: '#787B82' })
+      .borderRadius(17)
+      .padding({ left: 0, right: 0, top: 0, bottom: 2 })
+      .onClick(() => {
+        this.closeSymbolKeyboard();
+      })
+    }
+    .width('100%')
+    .height(FEATURE_ROW_HEIGHT)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private renderSymbolKeyRow(row: SymbolKeyDescriptor[]) {
+    Row({ space: 7 }) {
+      ForEach(row, (descriptor: SymbolKeyDescriptor) => {
+        this.renderSymbolKeyboardKey(descriptor)
+      }, (descriptor: SymbolKeyDescriptor): string => `${descriptor.role}-${descriptor.label}-${descriptor.output}`)
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  @Builder
+  private renderSymbolKeyboardBottomRow() {
+    Row({ space: 7 }) {
+      this.renderSymbolKeyboardKey({ label: '返回', output: '', role: 'return', weight: 1.55, gray: true })
+      this.renderSymbolKeyboardKey({
+        label: this.resolveQwertyCommaOutput(),
+        output: this.resolveQwertyCommaOutput(),
+        role: 'text',
+        weight: 1,
+        gray: false
+      })
+      this.renderSymbolKeyboardKey({ label: 'space', output: ' ', role: 'space', weight: 5.35, gray: false })
+      this.renderSymbolKeyboardKey({
+        label: this.resolveQwertyPeriodOutput(),
+        output: this.resolveQwertyPeriodOutput(),
+        role: 'text',
+        weight: 1,
+        gray: false
+      })
+      this.renderSymbolKeyboardKey({ label: '搜索', output: '', role: 'enter', weight: 1.55, gray: true })
+    }
+    .width('100%')
+    .layoutWeight(1)
+  }
+
+  @Builder
+  private renderSymbolKeyboardKey(descriptor: SymbolKeyDescriptor) {
+    Button() {
+      if (descriptor.role === 'backspace') {
+        this.renderIconAsset('backspace', 34, 26)
+      } else if (descriptor.role === 'space') {
+        Column({ space: 2 }) {
+          this.renderIconAsset('mic', 24, 22, 0.72)
+          Column()
+            .width(42)
+            .height(3)
+            .backgroundColor('#111214')
+        }
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else {
+        Text(descriptor.label)
+          .fontSize(this.resolveSymbolKeyboardFontSize(descriptor))
+          .minFontSize(12)
+          .maxFontSize(this.resolveSymbolKeyboardFontSize(descriptor))
+          .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+          .maxLines(1)
+          .fontWeight(FontWeight.Normal)
+          .fontColor('#111214')
+          .textAlign(TextAlign.Center)
+      }
+    }
+    .layoutWeight(descriptor.weight)
+    .height('100%')
+    .backgroundColor(descriptor.gray ? '#C4CAD3' : '#FFFFFF')
+    .border({ width: 1, color: descriptor.gray ? '#BFC5CD' : '#F6F7F9' })
+    .borderRadius(T9_KEY_RADIUS)
+    .shadow(this.resolveWhiteKeyShadow())
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
+    .onClick(() => {
+      this.handleSymbolKeyboardKey(descriptor);
+    })
   }
 
   @Builder
@@ -1741,6 +1989,29 @@ struct KeyboardPanel {
   }
 
   @Builder
+  private renderInputModeFeatureButton() {
+    if (this.isVoiceModeActive()) {
+      this.renderFeatureIconAssetButton(
+        'keyboard',
+        (): void => {
+          this.toggleVoiceKeyboardMode();
+        },
+        false,
+        this.canToggleVoiceKeyboardMode()
+      )
+    } else {
+      this.renderFeatureIconAssetButton(
+        'mic',
+        (): void => {
+          this.toggleVoiceKeyboardMode();
+        },
+        false,
+        this.canToggleVoiceKeyboardMode()
+      )
+    }
+  }
+
+  @Builder
   private renderIconAsset(kind: string, width: number, height: number, opacity: number = 1) {
     if (kind === 'tool') {
       Image($r('app.media.ime_icon_feature_tool'))
@@ -1786,6 +2057,18 @@ struct KeyboardPanel {
         .opacity(opacity)
     } else if (kind === 'voicepad') {
       Image($r('app.media.ime_icon_key_voicepad'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'keyboard') {
+      Image($r('app.media.ime_icon_feature_keyboard'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'gear') {
+      Image($r('app.media.ime_icon_settings_gear'))
         .width(width)
         .height(height)
         .objectFit(ImageFit.Contain)
@@ -2061,7 +2344,7 @@ struct KeyboardPanel {
         .fontSize(8)
         .fontColor('#A4A6AD')
 
-      Text(descriptor.label)
+      Text(this.resolveQwertyLetterLabel(descriptor.value))
         .fontSize(15)
         .minFontSize(10)
         .maxFontSize(15)
@@ -2082,6 +2365,15 @@ struct KeyboardPanel {
     .onClick(() => {
       this.handleReferenceQwertyLetterInput(descriptor.value);
     })
+    .gesture(
+      LongPressGesture({ repeat: false, duration: 450 })
+        .onAction(() => {
+          this.handleReferenceQwertySecondaryInput(descriptor.hint);
+        })
+        .onActionEnd(() => {
+          this.armQwertyLongPressClickSuppression();
+        })
+    )
   }
 
   @Builder
@@ -2213,13 +2505,14 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderReferenceQwertyVoiceKey(weight: number = 2.5) {
-    // The mic key doubles as the space-bar in the 26-key layout so it should
-    // span roughly 2.5× a letter key width, matching the wide central key in
-    // the reference mockup. Weight is parameterised so callers can adjust per
-    // layout variant.
+  private renderReferenceQwertySpaceKey(weight: number = 2.5) {
+    // The 26-key layout uses a dedicated space key in the centre of the
+    // bottom row. It stays a plain space bar regardless of voice settings.
     Column() {
-      this.renderIconAsset('voicepad', 84, 36)
+      Text(this.resolveReferenceQwertySpaceLabel())
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#6F737B')
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
@@ -2229,14 +2522,9 @@ struct KeyboardPanel {
     .border({ width: 1, color: '#F6F7F9' })
     .borderRadius(T9_KEY_RADIUS)
     .shadow(this.resolveWhiteKeyShadow())
-    .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
-      if (this.uiState.voiceEnabled) {
-        this.startOrStopVoice();
-      } else {
-        this.commitText(' ');
-      }
+      this.commitText(' ');
     })
   }
 
@@ -2245,19 +2533,19 @@ struct KeyboardPanel {
   }
 
   private resolveReferenceNineKeyGridHeight(): number {
-    return 168;
+    return 170;
   }
 
   private resolveReferenceNineKeyRowHeight(): number {
-    return 52;
+    return 54;
   }
 
   private resolveReferenceNineKeyBottomHeight(): number {
-    return 50;
+    return 52;
   }
 
   private resolveReferenceNineKeyTallActionHeight(): number {
-    return 108;
+    return 110;
   }
 
   private resolveWhiteKeyShadow(): ShadowOptions {
@@ -2291,7 +2579,7 @@ struct KeyboardPanel {
   }
 
   private resolveFeatureButtonWidth(kind: string): number {
-    if (kind === 'tool' || kind === 'magic') {
+    if (kind === 'tool' || kind === 'magic' || kind === 'gear') {
       return 40;
     }
     if (kind === 'chevron') {
@@ -2303,6 +2591,9 @@ struct KeyboardPanel {
   private resolveFeatureIconWidth(kind: string): number {
     if (kind === 'tool' || kind === 'magic') {
       return 30;
+    }
+    if (kind === 'gear') {
+      return 28;
     }
     if (kind === 'chevron') {
       return 26;
@@ -2324,15 +2615,15 @@ struct KeyboardPanel {
   }
 
   private resolveReferenceQwertyHeight(): number {
-    return 204;
+    return 202;
   }
 
   private resolveReferenceQwertyRowHeight(): number {
-    return 44;
+    return 46;
   }
 
   private resolveReferenceQwertyBottomHeight(): number {
-    return 42;
+    return 44;
   }
 
   private resolveReferenceQwertyBottomFontSize(label: string): number {
@@ -2348,29 +2639,100 @@ struct KeyboardPanel {
     return label.length > 2 ? 10 : 12;
   }
 
+  private resolveSymbolKeyboardFontSize(descriptor: SymbolKeyDescriptor): number {
+    return 15;
+  }
+
+  private resolveQwertyLetterLabel(value: string): string {
+    return this.qwertyShiftEnabled ? value.toUpperCase() : value.toLowerCase();
+  }
+
   private handleReferenceQwertyLetterInput(value: string): void {
-    let committed = value;
-    if (this.qwertyShiftEnabled && this.isEnglishSubtype()) {
-      committed = value.toUpperCase();
-      this.qwertyShiftEnabled = false;
+    if (this.suppressNextQwertyLetterClick) {
+      this.suppressNextQwertyLetterClick = false;
+      this.clearQwertyLongPressSuppressTimer();
+      return;
     }
+    let committed = this.qwertyShiftEnabled ? value.toUpperCase() : value.toLowerCase();
     this.commitText(committed);
   }
 
+  private handleReferenceQwertySecondaryInput(value: string): void {
+    if (value.length === 0) {
+      return;
+    }
+    void imeRuntime.getSessionManager()?.insertPunctuation(value);
+  }
+
+  private armQwertyLongPressClickSuppression(): void {
+    this.suppressNextQwertyLetterClick = true;
+    this.clearQwertyLongPressSuppressTimer();
+    this.qwertyLongPressSuppressTimer = setTimeout((): void => {
+      this.suppressNextQwertyLetterClick = false;
+      this.qwertyLongPressSuppressTimer = undefined;
+    }, 250);
+  }
+
   private resolveQwertyCommaLabel(): string {
-    return this.isEnglishSubtype() ? ',' : '，';
+    return this.isEnglishPunctuationMode() ? ',' : '，';
   }
 
   private resolveQwertyPeriodLabel(): string {
-    return this.isEnglishSubtype() ? '.' : '。';
+    return this.isEnglishPunctuationMode() ? '.' : '。';
   }
 
   private resolveQwertyCommaOutput(): string {
-    return this.isEnglishSubtype() ? ',' : '，';
+    return this.isEnglishPunctuationMode() ? ',' : '，';
   }
 
   private resolveQwertyPeriodOutput(): string {
-    return this.isEnglishSubtype() ? '.' : '。';
+    return this.isEnglishPunctuationMode() ? '.' : '。';
+  }
+
+  private resolveReferenceQwertySpaceLabel(): string {
+    if (!this.isEnglishPunctuationMode()) {
+      return '空格';
+    }
+    return this.qwertyShiftEnabled ? 'SPACE' : 'space';
+  }
+
+  private openSymbolKeyboard(): void {
+    this.showSymbolKeyboard = true;
+    this.showSymbolPalette = false;
+    this.symbolKeyboardMorePage = false;
+  }
+
+  private closeSymbolKeyboard(): void {
+    this.showSymbolKeyboard = false;
+    this.symbolKeyboardMorePage = false;
+  }
+
+  private insertSymbolText(text: string): void {
+    if (text.length === 0) {
+      return;
+    }
+    void imeRuntime.getSessionManager()?.insertPunctuation(text);
+  }
+
+  private handleSymbolKeyboardKey(descriptor: SymbolKeyDescriptor): void {
+    switch (descriptor.role) {
+      case 'text':
+      case 'space':
+        this.insertSymbolText(descriptor.output);
+        break;
+      case 'backspace':
+        void imeRuntime.getSessionManager()?.pressBackspace();
+        break;
+      case 'more':
+        this.symbolKeyboardMorePage = !this.symbolKeyboardMorePage;
+        break;
+      case 'return':
+        this.closeSymbolKeyboard();
+        break;
+      case 'enter':
+        void imeRuntime.getSessionManager()?.pressEnter();
+        break;
+    }
   }
 
   private handlePrimaryToolbarAction(): void {
@@ -2479,6 +2841,76 @@ struct KeyboardPanel {
     this.activeSettingsTab = 'input';
     this.seedRuntimeSettingsState();
     this.showSymbolPalette = false;
+    this.showSymbolKeyboard = false;
+    this.symbolKeyboardMorePage = false;
+  }
+
+  private canToggleVoiceKeyboardMode(): boolean {
+    if (this.isVoiceModeActive()) {
+      return true;
+    }
+    if (!this.isRuntimeVoiceEnabled()) {
+      return false;
+    }
+    return this.hasLayoutOption('voice_panel') || this.resolveVoiceSubtypeId().length > 0;
+  }
+
+  private isVoiceModeActive(): boolean {
+    return this.uiState.keyboardLayout === 'voice_panel' || this.uiState.currentSubtypeId === 'zh-CN-voice';
+  }
+
+  private isRuntimeVoiceEnabled(): boolean {
+    let runtime = imeRuntime.getSessionManager()?.getRuntimeSettingsSnapshot();
+    if (runtime) {
+      return runtime.enableVoice;
+    }
+    return this.runtimeEnableVoice;
+  }
+
+  private toggleVoiceKeyboardMode(): void {
+    void this.toggleVoiceKeyboardModeAsync();
+  }
+
+  private async toggleVoiceKeyboardModeAsync(): Promise<void> {
+    let sessionManager = imeRuntime.getSessionManager();
+    if (!sessionManager) {
+      return;
+    }
+
+    this.showSymbolPalette = false;
+    this.showSymbolKeyboard = false;
+    this.symbolKeyboardMorePage = false;
+
+    if (this.uiState.keyboardLayout === 'voice_panel') {
+      if (this.uiState.voiceState === 'recording' || this.uiState.voiceState === 'processing') {
+        await sessionManager.stopVoiceInput(true);
+      }
+
+      if (this.hasLayoutOption('qwerty_26') || this.hasLayoutOption('t9_9')) {
+        await sessionManager.switchKeyboardLayout(this.resolveKeyboardModeLayout());
+        return;
+      }
+
+      let keyboardSubtypeId = this.resolveKeyboardModeSubtypeId();
+      if (keyboardSubtypeId.length === 0) {
+        return;
+      }
+      await sessionManager.switchSubtype(keyboardSubtypeId);
+      await sessionManager.switchKeyboardLayout(this.resolveKeyboardModeLayout());
+      return;
+    }
+
+    if (this.hasLayoutOption('voice_panel')) {
+      await sessionManager.switchKeyboardLayout('voice_panel');
+      return;
+    }
+
+    let voiceSubtypeId = this.resolveVoiceSubtypeId();
+    if (voiceSubtypeId.length === 0) {
+      return;
+    }
+    await sessionManager.switchSubtype(voiceSubtypeId);
+    await sessionManager.switchKeyboardLayout('voice_panel');
   }
 
   private closeSettingsOverlay(): void {
@@ -2486,6 +2918,8 @@ struct KeyboardPanel {
     this.activeSettingsTab = 'input';
     this.runtimeSaveStatus = '';
     this.llmSaveStatus = '';
+    this.showSymbolKeyboard = false;
+    this.symbolKeyboardMorePage = false;
   }
 
   private supportsNineKey(): boolean {
@@ -2494,6 +2928,31 @@ struct KeyboardPanel {
 
   private supportsTwentySixKey(): boolean {
     return this.hasLayoutOption('qwerty_26');
+  }
+
+  private resolveKeyboardModeLayout(): KeyboardLayoutId {
+    if (this.lastNonVoiceKeyboardLayout === 't9_9') {
+      return 't9_9';
+    }
+    return 'qwerty_26';
+  }
+
+  private resolveKeyboardModeSubtypeId(): string {
+    if (this.lastNonVoiceSubtypeId.length > 0 &&
+      this.lastNonVoiceSubtypeId !== 'zh-CN-voice' &&
+      this.findSubtypeById(this.lastNonVoiceSubtypeId).length > 0) {
+      return this.lastNonVoiceSubtypeId;
+    }
+
+    let pinyinSubtype = this.findSubtypeById('zh-Hans-pinyin');
+    if (pinyinSubtype.length > 0) {
+      return pinyinSubtype;
+    }
+    return this.findFirstSubtypeByLocale('zh');
+  }
+
+  private resolveVoiceSubtypeId(): string {
+    return this.findSubtypeById('zh-CN-voice');
   }
 
   private hasLayoutOption(layout: KeyboardLayoutId): boolean {
@@ -2513,12 +2972,19 @@ struct KeyboardPanel {
     return this.uiState.currentSubtypeId.startsWith('en-');
   }
 
+  private isEnglishPunctuationMode(): boolean {
+    return this.uiState.punctuationMode === 'en';
+  }
+
   private switchQuickSubtype(): void {
     let targetSubtype = this.resolveQuickSwitchSubtypeId();
     if (targetSubtype.length === 0) {
       return;
     }
-    void imeRuntime.getSessionManager()?.switchSubtype(targetSubtype);
+    void this.switchSubtypeWithKeyboardLayoutAsync(
+      targetSubtype,
+      this.resolvePreferredKeyboardLayoutForSubtype(targetSubtype)
+    );
   }
 
   private switchSettingsSubtype(preferredSubtypeId: string): void {
@@ -2530,20 +2996,59 @@ struct KeyboardPanel {
     if (targetSubtype.length === 0) {
       return;
     }
-    void imeRuntime.getSessionManager()?.switchSubtype(targetSubtype);
+    void this.switchSubtypeWithKeyboardLayoutAsync(
+      targetSubtype,
+      this.resolvePreferredKeyboardLayoutForSubtype(targetSubtype)
+    );
     this.closeSettingsOverlay();
+  }
+
+  private async switchSubtypeWithKeyboardLayoutAsync(
+    targetSubtype: string,
+    targetLayout: KeyboardLayoutId
+  ): Promise<void> {
+    let sessionManager = imeRuntime.getSessionManager();
+    if (!sessionManager) {
+      return;
+    }
+    await sessionManager.switchSubtype(targetSubtype);
+    await sessionManager.switchKeyboardLayout(targetLayout);
   }
 
   private resolveQuickSwitchSubtypeId(): string {
     if (this.uiState.currentSubtypeId.startsWith('en-')) {
+      let rememberedChineseSubtype = this.findSubtypeById(this.lastChineseSubtypeId);
+      if (rememberedChineseSubtype.length > 0 && rememberedChineseSubtype !== 'zh-CN-voice') {
+        return rememberedChineseSubtype;
+      }
       let zhSubtype = this.findSubtypeById('zh-Hans-pinyin');
       return zhSubtype.length > 0 ? zhSubtype : this.findFirstSubtypeByLocale('zh');
+    }
+    let rememberedEnglishSubtype = this.findSubtypeById(this.lastEnglishSubtypeId);
+    if (rememberedEnglishSubtype.length > 0) {
+      return rememberedEnglishSubtype;
     }
     let englishSubtype = this.findSubtypeById('en-US-qwerty');
     if (englishSubtype.length > 0) {
       return englishSubtype;
     }
     return this.findFirstSubtypeByLocale('en');
+  }
+
+  private resolvePreferredKeyboardLayoutForSubtype(targetSubtypeId: string): KeyboardLayoutId {
+    if (targetSubtypeId.startsWith('en-')) {
+      if (this.lastEnglishKeyboardLayout === 't9_9') {
+        return 't9_9';
+      }
+      return 'qwerty_26';
+    }
+    if (targetSubtypeId.startsWith('zh-')) {
+      if (this.lastChineseKeyboardLayout === 't9_9') {
+        return 't9_9';
+      }
+      return 'qwerty_26';
+    }
+    return 'qwerty_26';
   }
 
   private findSubtypeById(subtypeId: string): string {
@@ -2604,6 +3109,19 @@ struct KeyboardPanel {
       return '输入后显示候选';
     }
     return '等待输入';
+  }
+
+  private resolveCandidatePreeditText(): string {
+    if (this.uiState.preedit.length > 0) {
+      return this.uiState.preedit;
+    }
+    if (this.uiState.activeNineKeySpelling.length > 0) {
+      return this.uiState.activeNineKeySpelling;
+    }
+    if (this.uiState.nineKeySequence.length > 0) {
+      return this.uiState.nineKeySequence;
+    }
+    return '';
   }
 
   private resolveLayoutIconLabel(): string {

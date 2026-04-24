@@ -45,9 +45,36 @@
     "sampleRate": 16000,
     "maxRecordSeconds": 45,
     "requestTimeoutMs": 20000,
+    "asrProvider": "auto",
     "asrEndpoint": "",
     "autoInsertResult": false,
     "autoPolishResult": true,
+    "localAsr": {
+      "enabled": true,
+      "provider": "sherpa-onnx",
+      "modelId": "sense-voice-zh-en-ja-ko-yue-2024-07-17-int8",
+      "source": "sensevoice_local",
+      "language": [
+        "zh",
+        "en",
+        "ja",
+        "ko",
+        "yue"
+      ],
+      "captureSampleRate": 16000,
+      "numThreads": 1,
+      "lazyLoad": true,
+      "releaseOnKeyboardHide": true,
+      "partialEmitIntervalMs": 900,
+      "decodingMethod": "greedy_search",
+      "maxActivePaths": 4,
+      "endpoint": {
+        "enabled": true,
+        "rule1MinTrailingSilence": 2.4,
+        "rule2MinTrailingSilence": 1.8,
+        "rule3MinUtteranceLength": 20
+      }
+    },
     "mockTranscript": "这是一次语音输入示例"
   },
   "llmPolish": {

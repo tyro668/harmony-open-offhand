@@ -99,11 +99,36 @@ export interface OffhandVoiceConfig {
   sampleRate: number;
   maxRecordSeconds: number;
   requestTimeoutMs: number;
+  asrProvider: 'auto' | 'sensevoice_local' | 'builtin' | 'remote';
   asrEndpoint: string;
   apiKey?: string;
   autoInsertResult: boolean;
   autoPolishResult: boolean;
+  localAsr: OffhandLocalAsrConfig;
   mockTranscript: string;
+}
+
+export interface OffhandLocalAsrEndpointConfig {
+  enabled: boolean;
+  rule1MinTrailingSilence: number;
+  rule2MinTrailingSilence: number;
+  rule3MinUtteranceLength: number;
+}
+
+export interface OffhandLocalAsrConfig {
+  enabled: boolean;
+  provider: string;
+  modelId: string;
+  source: 'sensevoice_local';
+  language: string[];
+  captureSampleRate?: number;
+  numThreads: number;
+  lazyLoad: boolean;
+  releaseOnKeyboardHide: boolean;
+  partialEmitIntervalMs: number;
+  decodingMethod: 'greedy_search' | 'modified_beam_search';
+  maxActivePaths: number;
+  endpoint: OffhandLocalAsrEndpointConfig;
 }
 
 export type LlmProtocolId = 'openai-compatible' | 'anthropic-compatible';
@@ -162,6 +187,7 @@ export interface OffhandImeConfig {
 export interface OffhandRuntimeSettings {
   enablePreviewText: boolean;
   enableVoice: boolean;
+  enableBuiltinAsr: boolean;
   enableCloudPolish: boolean;
   enablePersonalization: boolean;
   autoInsertVoiceResult: boolean;
@@ -205,7 +231,7 @@ export interface InputSessionContext {
 
 export interface VoiceRecognitionResult {
   text: string;
-  source: 'remote_asr' | 'builtin_asr' | 'mock';
+  source: 'remote_asr' | 'builtin_asr' | 'sensevoice_local' | 'mock';
 }
 
 export interface PolishSuggestion {
