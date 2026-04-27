@@ -1,4 +1,11 @@
-import { CandidateItem, KeyboardLayoutId, KeyboardLayoutOption, SubtypeSummary, VoiceInputState } from '../common/ImeTypes';
+import {
+  CandidateItem,
+  KeyboardLayoutId,
+  KeyboardLayoutOption,
+  LetterCaseMode,
+  SubtypeSummary,
+  VoiceInputState
+} from '../common/ImeTypes';
 
 export interface KeyboardUiState {
   isReady: boolean;
@@ -12,6 +19,7 @@ export interface KeyboardUiState {
   currentSubtypeName: string;
   punctuationMode: string;
   keyboardLayout: KeyboardLayoutId;
+  letterCaseMode: LetterCaseMode;
   availableKeyboardLayouts: KeyboardLayoutOption[];
   availableSubtypes: SubtypeSummary[];
   nineKeySequence: string;
@@ -51,6 +59,7 @@ const DEFAULT_STATE: KeyboardUiState = {
   currentSubtypeName: '',
   punctuationMode: 'zh',
   keyboardLayout: 'qwerty_26',
+  letterCaseMode: 'lower',
   availableKeyboardLayouts: [
     { id: 'qwerty_26', label: '26 键' }
   ],
@@ -129,6 +138,9 @@ class KeyboardStateStore {
     }
     if (nextState.keyboardLayout !== undefined) {
       updatedState.keyboardLayout = nextState.keyboardLayout;
+    }
+    if (nextState.letterCaseMode !== undefined) {
+      updatedState.letterCaseMode = nextState.letterCaseMode;
     }
     if (nextState.availableKeyboardLayouts !== undefined) {
       updatedState.availableKeyboardLayouts = cloneKeyboardLayoutOptions(nextState.availableKeyboardLayouts);
@@ -295,6 +307,7 @@ function cloneKeyboardUiState(source: KeyboardUiState): KeyboardUiState {
     currentSubtypeName: source.currentSubtypeName,
     punctuationMode: source.punctuationMode,
     keyboardLayout: source.keyboardLayout,
+    letterCaseMode: source.letterCaseMode,
     availableKeyboardLayouts: cloneKeyboardLayoutOptions(source.availableKeyboardLayouts),
     availableSubtypes: cloneSubtypeSummaries(source.availableSubtypes),
     nineKeySequence: source.nineKeySequence,

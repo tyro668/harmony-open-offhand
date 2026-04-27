@@ -4,6 +4,7 @@ import {
   InputSessionContext,
   KeyboardLayoutId,
   KeyboardLayoutOption,
+  LetterCaseMode,
   OffhandRuntimeSettings,
   OffhandSubtypeConfig,
   PolishSuggestion,
@@ -70,6 +71,7 @@ export class SessionManager {
   private keyboardPanel?: inputMethodEngine.Panel;
   private currentSubtype?: OffhandSubtypeConfig;
   private currentKeyboardLayout: KeyboardLayoutId = 'qwerty_26';
+  private letterCaseMode: LetterCaseMode = 'lower';
   private securityMode: number = inputMethodEngine.SecurityMode.BASIC;
   private activeSessionContext?: InputSessionContext;
   private activeCapabilities?: SessionCapabilitySnapshot;
@@ -101,6 +103,7 @@ export class SessionManager {
       isReady: true,
       statusText: 'IME bootstrap ready',
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      letterCaseMode: this.letterCaseMode,
       punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions()
     });
@@ -258,6 +261,7 @@ export class SessionManager {
     keyboardStateStore.patch({
       statusText: `Settings updated via ${reason}`,
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      letterCaseMode: this.letterCaseMode,
       punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       voiceEnabled: settings.enableVoice,
@@ -315,6 +319,7 @@ export class SessionManager {
     );
     keyboardStateStore.patch({
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      letterCaseMode: this.letterCaseMode,
       punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       statusText: `Switched to ${this.currentSubtype.name}`
@@ -345,6 +350,7 @@ export class SessionManager {
     }
     keyboardStateStore.patch({
       keyboardLayout: resolvedLayout,
+      letterCaseMode: this.letterCaseMode,
       punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       statusText: `Switched to ${this.describeKeyboardLayout(resolvedLayout)}`
@@ -366,20 +372,40 @@ export class SessionManager {
     await this.syncPreviewText(state.composingText);
   }
 
-  // Persist the last user-selected entry mode so the next time the keyboard
-  // attaches to an editor it restores voice/keyboard exactly as the user left
-  // it. Only the defaultEntryMode field is touched to avoid side effects from
-  // updateRuntimeSettings (which stops voice capture, etc.).
-  private async rememberDefaultEntryMode(): Promise<void> {
-    if (!this.context) {
+  async switchLetterCase(mode: LetterCaseMode): Promise<void> {
+    let normalized: LetterCaseMode = mode === 'upper' ? 'upper' : 'lower';
+    if (this.letterCaseMode === normalized) {
       return;
     }
-    let mode: string = this.currentKeyboardLayout === 'voice_panel' ? 'voice' : 'keyboard';
+    this.letterCaseMode = normalized;
+    keyboardStateStore.patch({
+      letterCaseMode: this.letterCaseMode,
+      statusText: normalized === 'upper' ? 'Switched to uppercase' : 'Switched to lowercase'
+    });
+    void this.rememberDefaultEntryMode();
+  }
+
+  // Persist the last user-selected input mode so the next time the keyboard
+  // attaches to an editor it restores subtype/layout/case exactly as the user
+  // left it. Only default-mode fields are touched to avoid side effects from
+  // updateRuntimeSettings (which stops voice capture, etc.).
+  private async rememberDefaultEntryMode(): Promise<void> {
+    if (!this.context || !this.currentSubtype) {
+      return;
+    }
+    let layout = this.getResolvedKeyboardLayout();
+    let mode: string = layout === 'voice_panel' ? 'voice' : 'keyboard';
     let current = this.configRepository.getRuntimeSettings();
-    if (current.defaultEntryMode === mode) {
+    if (current.defaultEntryMode === mode &&
+      current.defaultSubtypeId === this.currentSubtype.id &&
+      current.defaultKeyboardLayout === layout &&
+      current.defaultLetterCase === this.letterCaseMode) {
       return;
     }
     current.defaultEntryMode = mode;
+    current.defaultSubtypeId = this.currentSubtype.id;
+    current.defaultKeyboardLayout = layout;
+    current.defaultLetterCase = this.letterCaseMode;
     try {
       await this.configRepository.saveRuntimeSettings(this.context, current);
     } catch (error) {
@@ -1281,6 +1307,7 @@ export class SessionManager {
       currentSubtypeId: this.currentSubtype.id,
       currentSubtypeName: this.currentSubtype.name,
       keyboardLayout: this.getResolvedKeyboardLayout(),
+      letterCaseMode: this.letterCaseMode,
       punctuationMode: this.resolveActivePunctuationMode(),
       availableKeyboardLayouts: this.resolveKeyboardLayoutOptions(),
       voiceEnabled: this.activeCapabilities.voiceEnabled,
@@ -1802,17 +1829,29 @@ export class SessionManager {
     let preferredSubtype = this.configRepository.getPreferredInitialSubtype();
     this.currentSubtype = preferredSubtype;
     this.currentKeyboardLayout = preferredSubtype.keyboardLayout;
+    this.letterCaseMode = runtime.defaultLetterCase === 'upper' ? 'upper' : 'lower';
+    let availableLayouts = this.resolveAvailableKeyboardLayouts();
+    if (availableLayouts.indexOf(runtime.defaultKeyboardLayout) >= 0) {
+      this.currentKeyboardLayout = runtime.defaultKeyboardLayout;
+    }
     hilog.info(DOMAIN, TAG,
-      'applyPreferredInitialSubtype: mode=%{public}s enableVoice=%{public}s subtype=%{public}s layout=%{public}s',
+      'applyPreferredInitialSubtype: mode=%{public}s enableVoice=%{public}s subtype=%{public}s layout=%{public}s case=%{public}s',
       runtime.defaultEntryMode,
       String(runtime.enableVoice),
       preferredSubtype.id,
-      preferredSubtype.keyboardLayout);
+      this.currentKeyboardLayout,
+      this.letterCaseMode);
     keyboardStateStore.setSubtypes(
       this.configRepository.listSubtypeSummaries(),
       preferredSubtype.id,
       preferredSubtype.name
     );
+    keyboardStateStore.patch({
+      keyboardLayout: this.getResolvedKeyboardLayout(),
+      letterCaseMode: this.letterCaseMode,
+      punctuationMode: this.resolveActivePunctuationMode(),
+      availableKeyboardLayouts: this.resolveKeyboardLayoutOptions()
+    });
   }
 
   private resolvePreferredKeyboardLayout(subtype: OffhandSubtypeConfig): KeyboardLayoutId {
@@ -1856,7 +1895,8 @@ export class SessionManager {
       layouts = this.resolveSupportedKeyboardLayouts(this.currentSubtype);
     }
     // 如果当前子类型支持语音，将语音面板加入可选布局
-    if (this.currentSubtype.voiceEnabled && layouts.indexOf('voice_panel') < 0) {
+    if (this.currentSubtype.voiceEnabled && this.configRepository.getConfig().voice.enabled &&
+      layouts.indexOf('voice_panel') < 0) {
       layouts.push('voice_panel');
     }
     return layouts;
@@ -1966,6 +2006,12 @@ export class SessionManager {
   }
 
   private shouldAutoCapitalizeEnglish(): boolean {
+    // Explicit upper/lower keyboard modes should be literal. Otherwise a
+    // persisted lowercase mode could still emit "Hello" because the English
+    // engine auto-capitalizes at sentence boundaries.
+    if (this.letterCaseMode === 'lower') {
+      return false;
+    }
     if (this.activeSessionContext && SecurityPolicy.isEmailOrUriPattern(this.activeSessionContext.inputPattern)) {
       return false;
     }
@@ -1996,7 +2042,7 @@ export class SessionManager {
 
   private startVoiceAutoStopTimer(maxRecordSeconds: number): void {
     this.clearVoiceAutoStopTimer();
-    if (maxRecordSeconds <= 0) {
+    if (!Number.isFinite(maxRecordSeconds) || maxRecordSeconds <= 0) {
       return;
     }
     let timerId = setTimeout((): void => {

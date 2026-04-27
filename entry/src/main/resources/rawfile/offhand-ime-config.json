@@ -43,7 +43,7 @@
   "voice": {
     "enabled": true,
     "sampleRate": 16000,
-    "maxRecordSeconds": 45,
+    "maxRecordSeconds": 0,
     "requestTimeoutMs": 20000,
     "asrProvider": "auto",
     "asrEndpoint": "",

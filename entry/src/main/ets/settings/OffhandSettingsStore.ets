@@ -3,14 +3,14 @@ import { preferences } from '@kit.ArkData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import contextConstant from '@ohos.app.ability.contextConstant';
 import fileIo from '@ohos.file.fs';
-import { OffhandRuntimeSettings } from '../ime/common/ImeTypes';
+import { KeyboardLayoutId, LetterCaseMode, OffhandRuntimeSettings } from '../ime/common/ImeTypes';
 import { getDefaultBuiltinModelSelection, resolveBuiltinModelSelection } from '../ime/config/BuiltinModels';
 
 const PREF_NAME = 'offhand_runtime_settings';
 const SETTINGS_KEY = 'runtime_settings_json';
 const LOG_DOMAIN = 0xFF10;
 const LOG_TAG = 'OffhandSettingsStore';
-const PERSISTED_SETTINGS_VERSION = 2;
+const PERSISTED_SETTINGS_VERSION = 3;
 const PREF_MODULE_NAME = 'entry';
 const SETTINGS_FILE_DIR = 'settings';
 const SETTINGS_FILE_NAME = 'offhand-runtime-settings.json';
@@ -442,12 +442,16 @@ export function createDefaultRuntimeSettings(): OffhandRuntimeSettings {
     llmPresetId: defaultSelection.preset.presetId,
     llmApiKey: '',
     llmStyle: 'clean_conversational',
-    defaultEntryMode: 'keyboard'
+    defaultEntryMode: 'keyboard',
+    defaultSubtypeId: 'zh-Hans-pinyin',
+    defaultKeyboardLayout: 'qwerty_26',
+    defaultLetterCase: 'lower'
   };
 }
 
 export function cloneRuntimeSettings(source: OffhandRuntimeSettings): OffhandRuntimeSettings {
   let selection = resolveBuiltinModelSelection(source.llmProviderId, source.llmPresetId);
+  let entryMode = normalizeEntryMode(source.defaultEntryMode);
   return {
     enablePreviewText: source.enablePreviewText,
     enableVoice: source.enableVoice,
@@ -461,7 +465,10 @@ export function cloneRuntimeSettings(source: OffhandRuntimeSettings): OffhandRun
     llmPresetId: selection.preset.presetId,
     llmApiKey: typeof source.llmApiKey === 'string' ? source.llmApiKey.trim() : '',
     llmStyle: source.llmStyle,
-    defaultEntryMode: normalizeEntryMode(source.defaultEntryMode)
+    defaultEntryMode: entryMode,
+    defaultSubtypeId: normalizeDefaultSubtypeId(source.defaultSubtypeId, entryMode),
+    defaultKeyboardLayout: normalizeDefaultKeyboardLayout(source.defaultKeyboardLayout, entryMode),
+    defaultLetterCase: normalizeDefaultLetterCase(source.defaultLetterCase)
   };
 }
 
@@ -523,11 +530,30 @@ function normalizeEntryMode(raw: string | undefined): string {
   return raw === 'voice' ? 'voice' : 'keyboard';
 }
 
+function normalizeDefaultSubtypeId(raw: string | undefined, entryMode: string): string {
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    return raw.trim();
+  }
+  return entryMode === 'voice' ? 'zh-CN-voice' : 'zh-Hans-pinyin';
+}
+
+function normalizeDefaultKeyboardLayout(raw: KeyboardLayoutId | string | undefined, entryMode: string): KeyboardLayoutId {
+  if (raw === 'qwerty_26' || raw === 't9_9' || raw === 'voice_panel') {
+    return raw;
+  }
+  return entryMode === 'voice' ? 'voice_panel' : 'qwerty_26';
+}
+
+function normalizeDefaultLetterCase(raw: LetterCaseMode | string | undefined): LetterCaseMode {
+  return raw === 'upper' ? 'upper' : 'lower';
+}
+
 function normalizeRuntimeSettings(raw: string): OffhandRuntimeSettings {
   try {
     let parsed = JSON.parse(raw) as OffhandRuntimeSettings;
     let defaults = createDefaultRuntimeSettings();
     let selection = resolveBuiltinModelSelection(parsed.llmProviderId, parsed.llmPresetId);
+    let entryMode = normalizeEntryMode(parsed.defaultEntryMode);
     return {
       enablePreviewText: parsed.enablePreviewText !== undefined ? parsed.enablePreviewText : defaults.enablePreviewText,
       enableVoice: parsed.enableVoice !== undefined ? parsed.enableVoice : defaults.enableVoice,
@@ -545,7 +571,10 @@ function normalizeRuntimeSettings(raw: string): OffhandRuntimeSettings {
       llmApiKey: typeof parsed.llmApiKey === 'string' ? parsed.llmApiKey.trim() : defaults.llmApiKey,
       llmStyle: typeof parsed.llmStyle === 'string' && parsed.llmStyle.trim().length > 0 ?
         parsed.llmStyle.trim() : defaults.llmStyle,
-      defaultEntryMode: normalizeEntryMode(parsed.defaultEntryMode)
+      defaultEntryMode: entryMode,
+      defaultSubtypeId: normalizeDefaultSubtypeId(parsed.defaultSubtypeId, entryMode),
+      defaultKeyboardLayout: normalizeDefaultKeyboardLayout(parsed.defaultKeyboardLayout, entryMode),
+      defaultLetterCase: normalizeDefaultLetterCase(parsed.defaultLetterCase)
     };
   } catch (_) {
     return createDefaultRuntimeSettings();

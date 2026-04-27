@@ -125,10 +125,13 @@ export class ConfigRepository {
   }
 
   // Returns the subtype that should be activated when the IME first attaches
-  // to an editor, honoring the user-selected defaultEntryMode:
-  //   - 'keyboard' (default): use the configured default subtype (26-key pinyin).
-  //   - 'voice': use the voice subtype when voice input is enabled; otherwise fall back.
+  // to an editor, honoring the last user-selected input mode. Older settings
+  // only persisted keyboard/voice; newer ones remember the exact subtype.
   getPreferredInitialSubtype(): OffhandSubtypeConfig {
+    let rememberedSubtype = this.findSubtypeById(this.runtimeSettings.defaultSubtypeId);
+    if (rememberedSubtype && (rememberedSubtype.keyboardLayout !== 'voice_panel' || this.runtimeSettings.enableVoice)) {
+      return rememberedSubtype;
+    }
     if (this.runtimeSettings.defaultEntryMode === 'voice' && this.runtimeSettings.enableVoice) {
       for (let index = 0; index < this.subtypes.length; index++) {
         let subtype = this.subtypes[index];
@@ -141,13 +144,21 @@ export class ConfigRepository {
   }
 
   resolveSubtypeById(subtypeId: string): OffhandSubtypeConfig {
+    let subtype = this.findSubtypeById(subtypeId);
+    if (subtype) {
+      return subtype;
+    }
+    return this.subtypes.length > 0 ? this.subtypes[0] : createDefaultSubtypes()[0];
+  }
+
+  private findSubtypeById(subtypeId: string): OffhandSubtypeConfig | undefined {
     for (let index = 0; index < this.subtypes.length; index++) {
       let subtype = this.subtypes[index];
       if (subtype.id === subtypeId) {
         return subtype;
       }
     }
-    return this.subtypes.length > 0 ? this.subtypes[0] : createDefaultSubtypes()[0];
+    return undefined;
   }
 
   async buildRimeInitOptions(context: InputMethodExtensionContext): Promise<RimeInitOptions> {
@@ -268,7 +279,9 @@ function createDefaultConfig(): OffhandImeConfig {
   let voiceConfig: OffhandVoiceConfig = {
     enabled: true,
     sampleRate: 16000,
-    maxRecordSeconds: 45,
+    // 0 disables the artificial auto-stop timer. Long voice input should keep
+    // recording until the user explicitly stops it or the IME session ends.
+    maxRecordSeconds: 0,
     requestTimeoutMs: 20000,
     asrProvider: 'auto',
     asrEndpoint: '',
@@ -448,7 +461,7 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
     voice: {
       enabled: source.voice.enabled,
       sampleRate: source.voice.sampleRate,
-      maxRecordSeconds: source.voice.maxRecordSeconds,
+      maxRecordSeconds: normalizeVoiceMaxRecordSeconds(source.voice.maxRecordSeconds),
       requestTimeoutMs: source.voice.requestTimeoutMs,
       asrProvider: normalizeAsrProvider(source.voice.asrProvider),
       asrEndpoint: source.voice.asrEndpoint,
@@ -478,6 +491,13 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
       enablePersonalization: source.privacy.enablePersonalization
     }
   };
+}
+
+function normalizeVoiceMaxRecordSeconds(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return value;
 }
 
 function createDefaultLocalAsrConfig(): OffhandLocalAsrConfig {

@@ -181,7 +181,6 @@ struct KeyboardPanel {
   @State private showSymbolPalette: boolean = false;
   @State private showSymbolKeyboard: boolean = false;
   @State private symbolKeyboardMorePage: boolean = false;
-  @State private qwertyShiftEnabled: boolean = false;
   // Pulse ring state for the voice waiting circle. `voicePulseExpanded`
   // toggles every PULSE_INTERVAL_MS so the outer rings animate out/in
   // continuously while we are waiting for the user to keep speaking.
@@ -243,14 +242,10 @@ struct KeyboardPanel {
           this.symbolKeyboardMorePage = false;
           this.activeSettingsTab = 'input';
         }
-        this.qwertyShiftEnabled = false;
       }
       if (state.keyboardLayout === 'voice_panel') {
         this.showSymbolKeyboard = false;
         this.symbolKeyboardMorePage = false;
-      }
-      if (state.keyboardLayout !== 'qwerty_26') {
-        this.qwertyShiftEnabled = false;
       }
       this.syncVoicePulseAnimation(state);
     });
@@ -1558,8 +1553,8 @@ struct KeyboardPanel {
       // Row 3 — ⇧ (weight 1.5) + 7 letters (weight 1) + ⌫ (weight 1.5) = 10.
       Row({ space: 3 }) {
         this.renderReferenceQwertySideKey('⇧', (): void => {
-          this.qwertyShiftEnabled = !this.qwertyShiftEnabled;
-        }, this.qwertyShiftEnabled, 1.5)
+          this.toggleQwertyLetterCase();
+        }, this.isQwertyUppercase(), 1.5)
 
         ForEach(QWERTY_BOTTOM_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
@@ -2644,7 +2639,7 @@ struct KeyboardPanel {
   }
 
   private resolveQwertyLetterLabel(value: string): string {
-    return this.qwertyShiftEnabled ? value.toUpperCase() : value.toLowerCase();
+    return this.isQwertyUppercase() ? value.toUpperCase() : value.toLowerCase();
   }
 
   private handleReferenceQwertyLetterInput(value: string): void {
@@ -2653,7 +2648,7 @@ struct KeyboardPanel {
       this.clearQwertyLongPressSuppressTimer();
       return;
     }
-    let committed = this.qwertyShiftEnabled ? value.toUpperCase() : value.toLowerCase();
+    let committed = this.isQwertyUppercase() ? value.toUpperCase() : value.toLowerCase();
     this.commitText(committed);
   }
 
@@ -2693,7 +2688,15 @@ struct KeyboardPanel {
     if (!this.isEnglishPunctuationMode()) {
       return '空格';
     }
-    return this.qwertyShiftEnabled ? 'SPACE' : 'space';
+    return this.isQwertyUppercase() ? 'SPACE' : 'space';
+  }
+
+  private isQwertyUppercase(): boolean {
+    return this.uiState.letterCaseMode === 'upper';
+  }
+
+  private toggleQwertyLetterCase(): void {
+    void imeRuntime.getSessionManager()?.switchLetterCase(this.isQwertyUppercase() ? 'lower' : 'upper');
   }
 
   private openSymbolKeyboard(): void {

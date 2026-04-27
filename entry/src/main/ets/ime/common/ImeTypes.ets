@@ -5,6 +5,7 @@ export interface RimeOptionState {
 }
 
 export type KeyboardLayoutId = 'qwerty_26' | 't9_9' | 'voice_panel';
+export type LetterCaseMode = 'upper' | 'lower';
 
 export interface KeyboardLayoutOption {
   id: KeyboardLayoutId;
@@ -97,6 +98,8 @@ export interface OffhandPinyinConfig {
 export interface OffhandVoiceConfig {
   enabled: boolean;
   sampleRate: number;
+  // <= 0 means no artificial session-layer cap; recording ends on user action
+  // or input-method lifecycle cancellation.
   maxRecordSeconds: number;
   requestTimeoutMs: number;
   asrProvider: 'auto' | 'sensevoice_local' | 'builtin' | 'remote';
@@ -198,6 +201,9 @@ export interface OffhandRuntimeSettings {
   llmApiKey: string;
   llmStyle: string;
   defaultEntryMode: string;
+  defaultSubtypeId: string;
+  defaultKeyboardLayout: KeyboardLayoutId;
+  defaultLetterCase: LetterCaseMode;
 }
 
 export interface RimeInitOptions {
