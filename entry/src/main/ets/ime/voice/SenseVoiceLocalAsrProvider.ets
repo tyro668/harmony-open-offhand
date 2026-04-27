@@ -76,6 +76,7 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
     if (!this.context) {
       throw new Error('local ASR context unavailable');
     }
+    // ensureReady 已在 isAvailable() 中调用过，此处直接复用缓存结果
     let modelPaths = await this.installer.ensureReady(this.context, config.localAsr);
     if (!modelPaths) {
       throw new Error('local ASR model is not ready');
@@ -160,11 +161,14 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
     recognizerConfig.modelConfig.tokens = paths.tokensPath;
     recognizerConfig.modelConfig.numThreads = clamp(config.localAsr.numThreads, 1, 2);
     recognizerConfig.modelConfig.provider = 'cpu';
-    recognizerConfig.modelConfig.debug = false;
+    recognizerConfig.modelConfig.debug = true;
     recognizerConfig.decodingMethod = config.localAsr.decodingMethod;
     recognizerConfig.maxActivePaths = clamp(config.localAsr.maxActivePaths, 1, 8);
 
     this.recognizer = new OfflineRecognizer(recognizerConfig, paths.resourceManager);
+    hilog.info(DOMAIN, TAG,
+      'recognizer created handle=%{public}s debug=%{public}s',
+      String(typeof this.recognizer.handle), String(recognizerConfig.modelConfig.debug));
   }
 
   private decodeSamples(samples: Float32Array): string {
@@ -179,6 +183,10 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
     });
     this.recognizer.decode(stream);
     let result = this.recognizer.getResult(stream);
+    hilog.info(DOMAIN, TAG,
+      'decode result sampleCount=%{public}d text="%{public}s" lang=%{public}s emotion=%{public}s event=%{public}s json=%{public}s',
+      samples.length, result.text, result.lang, result.emotion, result.event,
+      typeof result.json === 'string' ? (result.json as string).substring(0, 200) : '');
     return sanitizeTranscript(result.text);
   }
 

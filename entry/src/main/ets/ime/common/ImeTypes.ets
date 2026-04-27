@@ -19,7 +19,7 @@ export interface OffhandSubtypeExtras {
   supportedKeyboardLayouts?: KeyboardLayoutId[];
 }
 
-export type VoiceInputState = 'idle' | 'recording' | 'processing' | 'error';
+export type VoiceInputState = 'idle' | 'starting' | 'recording' | 'processing' | 'error';
 
 export interface CandidateItem {
   index: number;

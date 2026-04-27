@@ -266,7 +266,7 @@ struct KeyboardPanel {
     // is actively listening OR the LLM is polishing the transcript, so the
     // user always has a visual cue that background work is happening.
     let shouldPulse = state.keyboardLayout === 'voice_panel'
-      && (state.voiceState === 'recording' || state.isPolishRunning)
+      && (state.voiceState === 'recording' || state.voiceState === 'starting' || state.isPolishRunning)
       && state.voiceEnabled;
     if (shouldPulse) {
       this.startVoicePulseAnimation();
@@ -1791,6 +1791,8 @@ struct KeyboardPanel {
               Text('●')
                 .fontSize(48)
                 .fontColor('#FFFFFF')
+            } else if (this.uiState.voiceState === 'starting') {
+              this.renderIconAsset('mic', 36, 36, 0.72)
             } else {
               this.renderIconAsset('mic', 48, 48)
             }
@@ -1800,6 +1802,7 @@ struct KeyboardPanel {
           .type(ButtonType.Circle)
           .backgroundColor(
             this.uiState.voiceState === 'recording' ? '#B36D47' :
+            this.uiState.voiceState === 'starting' ? '#9A8A5E' :
             this.uiState.voiceState === 'error' ? '#D9534F' : '#7A835E'
           )
           .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
@@ -1811,7 +1814,7 @@ struct KeyboardPanel {
         .height(220)
         .alignContent(Alignment.Center)
 
-        if (this.uiState.voiceState !== 'recording' && this.uiState.voiceStatusText.length > 0) {
+        if (this.uiState.voiceState !== 'recording' && this.uiState.voiceState !== 'starting' && this.uiState.voiceStatusText.length > 0) {
           Text(this.uiState.voiceStatusText)
             .fontSize(12)
             .fontColor(this.uiState.voiceState === 'error' ? '#D9534F' : '#606168')
@@ -2785,10 +2788,17 @@ struct KeyboardPanel {
     if (this.uiState.voiceState === 'recording') {
       return '#B36D47';
     }
+    if (this.uiState.voiceState === 'starting') {
+      return '#9A8A5E';
+    }
     return '#7A835E';
   }
 
   private startOrStopVoice(): void {
+    if (this.uiState.voiceState === 'starting') {
+      // 正在启动录音，忽略重复点击
+      return;
+    }
     if (this.uiState.voiceState === 'recording') {
       void imeRuntime.getSessionManager()?.stopVoiceInput();
       return;
@@ -2885,7 +2895,7 @@ struct KeyboardPanel {
     this.symbolKeyboardMorePage = false;
 
     if (this.uiState.keyboardLayout === 'voice_panel') {
-      if (this.uiState.voiceState === 'recording' || this.uiState.voiceState === 'processing') {
+      if (this.uiState.voiceState === 'recording' || this.uiState.voiceState === 'processing' || this.uiState.voiceState === 'starting') {
         await sessionManager.stopVoiceInput(true);
       }
 

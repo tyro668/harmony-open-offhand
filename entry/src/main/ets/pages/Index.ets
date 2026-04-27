@@ -3,20 +3,13 @@ import { common } from '@kit.AbilityKit';
 
 const MICROPHONE_PERMISSION: 'ohos.permission.MICROPHONE' = 'ohos.permission.MICROPHONE';
 
-const PAGE_BACKGROUND = '#F4F7FB';
-const CARD_BACKGROUND = '#FFFFFF';
-const CARD_BORDER = '#E7EDF5';
-const CARD_SHADOW: ShadowOptions = {
-  radius: 10,
-  color: '#140A2540',
-  offsetX: 0,
-  offsetY: 6
-};
+const PAGE_BACKGROUND = '#FFFFFF';
 const PRIMARY_BLUE = '#1976F3';
 const SUCCESS_GREEN = '#19A79C';
 const ERROR_ORANGE = '#C46B29';
 const TEXT_PRIMARY = '#121826';
 const TEXT_SECONDARY = '#667085';
+const DIVIDER_COLOR = '#F0F2F5';
 
 @Entry
 @Component
@@ -30,55 +23,199 @@ struct Index {
   }
 
   build() {
-    Scroll() {
-      Column({ space: 12 }) {
-        this.renderEntryCard()
-        this.renderPermissionCard()
-      }
-      .width('100%')
-      .padding({ left: 20, right: 20, top: 20, bottom: 28 })
+    Column() {
+      this.renderHeader()
+      this.renderDivider()
+      this.renderEntrySection()
+      this.renderDivider()
+      this.renderPermissionSection()
     }
     .width('100%')
     .height('100%')
     .backgroundColor(PAGE_BACKGROUND)
+    .padding({ left: 20, right: 20, top: 28 })
   }
 
   @Builder
-  private renderEntryCard() {
-    Column({ space: 12 }) {
+  private renderHeader() {
+    Row() {
+      Text('配置')
+        .fontSize(28)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(TEXT_PRIMARY)
+    }
+    .width('100%')
+    .padding({ bottom: 20 })
+  }
+
+  @Builder
+  private renderDivider() {
+    Divider()
+      .strokeWidth(0.5)
+      .color(DIVIDER_COLOR)
+      .width('100%')
+  }
+
+  @Builder
+  private renderEntrySection() {
+    Column({ space: 16 }) {
       Text('输入法内配置')
-        .fontSize(18)
+        .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT_PRIMARY)
         .width('100%')
         .textAlign(TextAlign.Start)
+        .padding({ top: 20 })
+
+      this.renderKeyboardIllustration()
 
       Text('在键盘左上角打开配置。')
         .fontSize(14)
         .fontColor(TEXT_SECONDARY)
         .width('100%')
         .textAlign(TextAlign.Start)
-
-      this.renderStatusPill('键盘内配置', PRIMARY_BLUE)
+        .padding({ bottom: 20 })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
-    .padding(18)
-    .backgroundColor(CARD_BACKGROUND)
-    .borderRadius(24)
-    .border({ width: 1, color: CARD_BORDER })
-    .shadow(CARD_SHADOW)
   }
 
   @Builder
-  private renderPermissionCard() {
-    Column({ space: 14 }) {
+  private renderKeyboardIllustration() {
+    Column({ space: 3 }) {
+      Row() {
+        Column() {
+          Image($r('app.media.ime_icon_settings_gear'))
+            .width(24)
+            .height(24)
+            .objectFit(ImageFit.Contain)
+        }
+        .width(36)
+        .height(32)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .borderRadius(10)
+        .backgroundColor(PRIMARY_BLUE)
+        .opacity(0.12)
+
+        Blank()
+
+        Row({ space: 8 }) {
+          Column() {
+            Image($r('app.media.ime_icon_feature_mic'))
+              .width(22)
+              .height(22)
+              .objectFit(ImageFit.Contain)
+              .opacity(0.45)
+          }
+          .width(34)
+          .height(32)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+
+          Column()
+            .width(1)
+            .height(24)
+            .backgroundColor('#C5C8CF')
+
+          Column() {
+            Image($r('app.media.ime_icon_feature_chevron_down'))
+              .width(22)
+              .height(22)
+              .objectFit(ImageFit.Contain)
+              .opacity(0.45)
+          }
+          .width(34)
+          .height(32)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+        }
+      }
+      .width('100%')
+      .padding({ left: 6, right: 6 })
+      .alignItems(VerticalAlign.Center)
+
+      Row({ space: 2 }) {
+        ForEach(['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'], (key: string) => {
+          Text(key)
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#17181C')
+            .layoutWeight(1)
+            .height(26)
+            .textAlign(TextAlign.Center)
+            .borderRadius(5)
+            .backgroundColor('#FFFFFF')
+        })
+      }
+      .width('100%')
+
+      Row({ space: 2 }) {
+        Column().layoutWeight(0.5)
+        ForEach(['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'], (key: string) => {
+          Text(key)
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#17181C')
+            .layoutWeight(1)
+            .height(26)
+            .textAlign(TextAlign.Center)
+            .borderRadius(5)
+            .backgroundColor('#FFFFFF')
+        })
+        Column().layoutWeight(0.5)
+      }
+      .width('100%')
+
+      Row({ space: 2 }) {
+        Text('⇧')
+          .fontSize(10)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#17181C')
+          .layoutWeight(1.5)
+          .height(26)
+          .textAlign(TextAlign.Center)
+          .borderRadius(5)
+          .backgroundColor('#C9CAD3')
+        ForEach(['Z', 'X', 'C', 'V', 'B', 'N', 'M'], (key: string) => {
+          Text(key)
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#17181C')
+            .layoutWeight(1)
+            .height(26)
+            .textAlign(TextAlign.Center)
+            .borderRadius(5)
+            .backgroundColor('#FFFFFF')
+        })
+        Text('⌫')
+          .fontSize(10)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#17181C')
+          .layoutWeight(1.5)
+          .height(26)
+          .textAlign(TextAlign.Center)
+          .borderRadius(5)
+          .backgroundColor('#C9CAD3')
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ top: 6, bottom: 8, left: 8, right: 8 })
+    .backgroundColor('#D9DCE2')
+    .borderRadius(10)
+  }
+
+  @Builder
+  private renderPermissionSection() {
+    Column({ space: 16 }) {
       Text('麦克风')
-        .fontSize(18)
+        .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT_PRIMARY)
         .width('100%')
         .textAlign(TextAlign.Start)
+        .padding({ top: 20 })
 
       Row({ space: 12 }) {
         this.renderStatusPill(this.resolvePermissionLabel(), this.resolvePermissionColor())
@@ -92,46 +229,42 @@ struct Index {
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
+      .padding({ bottom: 20 })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
-    .padding(18)
-    .backgroundColor(CARD_BACKGROUND)
-    .borderRadius(24)
-    .border({ width: 1, color: CARD_BORDER })
-    .shadow(CARD_SHADOW)
   }
 
   @Builder
   private renderStatusPill(label: string, color: string) {
-    Row({ space: 8 }) {
+    Row({ space: 6 }) {
       Column()
-        .width(10)
-        .height(10)
-        .borderRadius(5)
+        .width(8)
+        .height(8)
+        .borderRadius(4)
         .backgroundColor(color)
 
       Text(label)
-        .fontSize(14)
+        .fontSize(13)
         .fontWeight(FontWeight.Medium)
         .fontColor(color)
     }
-    .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
     .backgroundColor('#F7FAFD')
-    .borderRadius(18)
+    .borderRadius(16)
     .alignItems(VerticalAlign.Center)
   }
 
   @Builder
   private renderActionButton(label: string, action: () => void) {
     Button(label)
-      .height(40)
-      .fontSize(14)
+      .height(36)
+      .fontSize(13)
       .fontWeight(FontWeight.Medium)
       .fontColor('#FFFFFF')
       .backgroundColor(PRIMARY_BLUE)
-      .borderRadius(16)
-      .padding({ left: 16, right: 16 })
+      .borderRadius(14)
+      .padding({ left: 14, right: 14 })
       .onClick((): void => {
         action();
       })

@@ -695,7 +695,7 @@ export class SessionManager {
       }
       if (this.editorAdapter) {
         keyboardStateStore.patch({
-          voiceState: 'idle',
+          voiceState: 'starting',
           voiceStatusText: 'Preparing voice session...',
           statusText: 'Refreshing session for voice input'
         });
@@ -740,6 +740,12 @@ export class SessionManager {
       return;
     }
     this.invalidatePolishActions();
+    // 立即显示录音开始状态，让用户感知到点击已被响应
+    keyboardStateStore.patch({
+      voiceState: 'starting',
+      voiceStatusText: 'Starting...',
+      statusText: 'Voice capture starting'
+    });
     let voiceConfig = this.configRepository.getConfig().voice;
     let permissionGranted = await this.permissionManager.ensureMicrophonePermission(this.context);
     if (!permissionGranted) {
@@ -800,10 +806,12 @@ export class SessionManager {
       }
       let transcript = result.text.trim();
       if (transcript.length === 0) {
+        // 空识别结果是正常情况（如无声/噪音），不应标记为 error 导致红色按钮
         keyboardStateStore.patch({
-          voiceState: 'error',
-          voiceStatusText: 'No speech recognized',
-          statusText: 'Voice input returned empty transcript'
+          voiceState: 'idle',
+          voiceStatusText: '未检测到语音',
+          voiceTranscriptPreview: '',
+          voiceDraftText: ''
         });
         return;
       }

@@ -191,7 +191,6 @@ export class VoiceCaptureService {
     this.capturedSampleCount = 0;
     this.captureStartedAtMs = 0;
     this.lastReadDataLogAtMs = 0;
-    await this.shutdownLocalAsr();
     this.useBuiltinAsr = false;
     this.pendingBuiltinAudio = new Uint8Array(0);
 
@@ -200,41 +199,17 @@ export class VoiceCaptureService {
       throw new Error('remote ASR selected but asrEndpoint is empty');
     }
 
-    await this.tryStartLocalAsr(config, locale, providerId);
-    let captureSampleRate = this.useLocalAsr ? resolveSenseVoiceCaptureSampleRate(config) : config.sampleRate;
+    let captureSampleRate = providerId === 'sensevoice_local' ?
+      resolveSenseVoiceCaptureSampleRate(config) : config.sampleRate;
     let sampleRate = resolveSampleRate(captureSampleRate);
     this.effectiveCaptureSampleRate = captureSampleRate;
 
-    // 自动/内置模式下当前语言为中文时，尝试使用系统内置 ASR。
-    // 真机上 CoreSpeechKit 可能因设备/签名/服务状态等原因初始化失败，
-    // 此处必须降级为"只采集 PCM + 最终走远程/mock 转写"，而不是直接
-    // 抛错阻塞整个录音启动——否则 UI 永远进入不到 'recording' 状态，
-    // 用户看到的就是"按大圆圈没有脉冲"。
-    if (!this.useLocalAsr && this.shouldTryBuiltinAsr(providerId) && this.isLocaleSupportedByBuiltinAsr(locale)) {
-      try {
-        await this.initBuiltinAsr(config, locale);
-        this.useBuiltinAsr = true;
-        hilog.info(0xFF10, 'VoiceCaptureService', 'builtin ASR initialized for %{public}s', locale);
-      } catch (error) {
-        let errorMsg = (error as Error).message ?? String(error);
-        hilog.warn(0xFF10, 'VoiceCaptureService',
-          'builtin ASR unavailable, falling back to audio-only capture: %{public}s', errorMsg);
-        this.shutdownBuiltinAsr();
-        this.useBuiltinAsr = false;
-        if (providerId === 'builtin') {
-          throw new Error(errorMsg);
-        }
-      }
-    } else if (!this.useLocalAsr && providerId === 'builtin') {
-      throw new Error(`builtin ASR does not support locale ${locale}`);
-    } else if (!this.useLocalAsr && providerId === 'auto' && config.asrEndpoint.length === 0) {
-      hilog.info(0xFF10, 'VoiceCaptureService',
-        'locale %{public}s not supported by builtin ASR, will use mock/remote', locale);
-    }
+    // 先关闭旧的 local ASR 避免资源泄漏，但不阻塞后续初始化
+    void this.shutdownLocalAsr();
 
+    // 优先创建并启动 AudioCapturer，减少用户感知的点击-录音延时
     hilog.info(0xFF10, 'VoiceCaptureService',
-      'creating AudioCapturer with sampleRate=%{public}d local=%{public}s',
-      captureSampleRate, String(this.useLocalAsr));
+      'creating AudioCapturer with sampleRate=%{public}d', captureSampleRate);
     try {
       this.capturer = await this.createCapturerWithFallback(sampleRate);
       this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(this.capturer, 'created'));
@@ -266,6 +241,43 @@ export class VoiceCaptureService {
     }
     hilog.info(0xFF10, 'VoiceCaptureService', 'AudioCapturer started successfully');
     this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(this.capturer, 'started'));
+
+    // 麦克风已开启后，再初始化 ASR 引擎（端侧模型加载 / 系统内置初始化）
+    // 记录当前已捕获的帧数，ASR 就绪后补推这些帧，避免早期音频丢失
+    let preAsrChunkCount = this.state.chunks.length;
+    await this.tryStartLocalAsr(config, locale, providerId);
+
+    // 将 ASR 初始化之前已捕获的音频帧补推给 local ASR
+    if (this.useLocalAsr && this.localAsrProvider && preAsrChunkCount > 0) {
+      hilog.info(0xFF10, 'VoiceCaptureService',
+        'backfilling %{public}d pre-ASR audio chunks', preAsrChunkCount);
+      for (let index = 0; index < preAsrChunkCount && index < this.state.chunks.length; index++) {
+        this.localAsrProvider.pushAudioFrame(this.state.chunks[index]);
+      }
+    }
+
+    // 自动/内置模式下当前语言为中文时，尝试使用系统内置 ASR。
+    if (!this.useLocalAsr && this.shouldTryBuiltinAsr(providerId) && this.isLocaleSupportedByBuiltinAsr(locale)) {
+      try {
+        await this.initBuiltinAsr(config, locale);
+        this.useBuiltinAsr = true;
+        hilog.info(0xFF10, 'VoiceCaptureService', 'builtin ASR initialized for %{public}s', locale);
+      } catch (error) {
+        let errorMsg = (error as Error).message ?? String(error);
+        hilog.warn(0xFF10, 'VoiceCaptureService',
+          'builtin ASR unavailable, falling back to audio-only capture: %{public}s', errorMsg);
+        this.shutdownBuiltinAsr();
+        this.useBuiltinAsr = false;
+        if (providerId === 'builtin') {
+          throw new Error(errorMsg);
+        }
+      }
+    } else if (!this.useLocalAsr && providerId === 'builtin') {
+      throw new Error(`builtin ASR does not support locale ${locale}`);
+    } else if (!this.useLocalAsr && providerId === 'auto' && config.asrEndpoint.length === 0) {
+      hilog.info(0xFF10, 'VoiceCaptureService',
+        'locale %{public}s not supported by builtin ASR, will use mock/remote', locale);
+    }
   }
 
   async stop(config: OffhandVoiceConfig, locale: string): Promise<VoiceRecognitionResult> {
