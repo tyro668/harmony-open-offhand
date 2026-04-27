@@ -237,7 +237,7 @@ export class ConfigRepository {
 
 function createDefaultConfig(): OffhandImeConfig {
   let appConfig: OffhandAppConfig = {
-    bundleName: 'com.opensource.harmony.offhand',
+    bundleName: 'com.opensource.metis.mobile.offhand',
     defaultSubtypeId: 'zh-Hans-pinyin',
     enableCloudFeaturesByDefault: false,
     maxConcurrentSessions: 1

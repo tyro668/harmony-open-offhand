@@ -1,7 +1,7 @@
 {
   "version": 1,
   "app": {
-    "bundleName": "com.opensource.harmony.offhand",
+    "bundleName": "com.opensource.metis.mobile.offhand",
     "defaultSubtypeId": "zh-Hans-pinyin",
     "enableCloudFeaturesByDefault": false,
     "maxConcurrentSessions": 1

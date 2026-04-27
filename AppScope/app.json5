@@ -1,7 +1,7 @@
 {
   "app": {
-    "bundleName": "com.opensource.harmony.offhand",
-    "vendor": "example",
+    "bundleName": "com.opensource.metis.mobile.offhand",
+    "vendor": "richie",
     "versionCode": 1000000,
     "versionName": "1.0.0",
     "icon": "$media:layered_image",

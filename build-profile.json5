@@ -2,23 +2,62 @@
   "app": {
     "signingConfigs": [
       {
-        "name": "default",
+        "name": "publish",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "/Users/richie/.ohos/config/default_harmony-open-offhand_Zc1kjvXuuAlvk04RQj5nH2_i1b7B_1U3VhWTp3rP18E=.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000001B432AE6F56C3815AAB9C815E62A6ECA755C6C77169B9381465559A37642D782AFD4D9F687D3EAF2",
-          "profile": "/Users/richie/.ohos/config/default_harmony-open-offhand_Zc1kjvXuuAlvk04RQj5nH2_i1b7B_1U3VhWTp3rP18E=.p7b",
+          "certpath": "../../hw_cert/harmony_release.cer",
+          "keyAlias": "harmony_release",
+          "keyPassword": "0000001DBC071FAD7B9507C32B52FFBC022A005326A9E95ACB5FD2BFBB8A75708BBB8BA30612440B5D9D9CC258",
+          "profile": "../../hw_cert/offhandRelease.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/richie/.ohos/config/default_harmony-open-offhand_Zc1kjvXuuAlvk04RQj5nH2_i1b7B_1U3VhWTp3rP18E=.p12",
-          "storePassword": "0000001BD3F3CA34CB13CC0A14649D22A74BB1A935291F1A341AFA230085F58C6BE0F0254421B2A6A9BC41"
+          "storeFile": "../../hw_cert/harmony_release.p12",
+          "storePassword": "0000001DBC071FAD7B9507C32B52FFBC022A005326A9E95ACB5FD2BFBB8A75708BBB8BA30612440B5D9D9CC258"
+        }
+      },
+      {
+        "name": "develop",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "../../../.ohos/config/develop_harmony-music_7_i6q9Ams3Q50CGoJ-nWJrabs5Ver_G_4sG5CJ5hqtI=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B62E8061950BD6A799F794A7B2BC52D65BEF4602D7677E4B566ACF93EAED774CA1251B687FE607E",
+          "profile": "../../../.ohos/config/develop_harmony-music_7_i6q9Ams3Q50CGoJ-nWJrabs5Ver_G_4sG5CJ5hqtI=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "../../../.ohos/config/develop_harmony-music_7_i6q9Ams3Q50CGoJ-nWJrabs5Ver_G_4sG5CJ5hqtI=.p12",
+          "storePassword": "0000001B78A2B5217EADC2E78CF8B10454CA317B8F6792DAD93DD39BF47B9AD2D0ED5E66E22CF091E5CEA9"
         }
       }
     ],
     "products": [
       {
         "name": "default",
-        "signingConfig": "default",
+        "signingConfig": "develop",
+        "targetSdkVersion": "6.0.2(22)",
+        "compatibleSdkVersion": "6.0.2(22)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      },
+      {
+        "name": "develop",
+        "signingConfig": "develop",
+        "targetSdkVersion": "6.0.2(22)",
+        "compatibleSdkVersion": "6.0.2(22)",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      },
+      {
+        "name": "publish",
+        "signingConfig": "publish",
         "targetSdkVersion": "6.0.2(22)",
         "compatibleSdkVersion": "6.0.2(22)",
         "runtimeOS": "HarmonyOS",
@@ -47,7 +86,9 @@
         {
           "name": "default",
           "applyToProducts": [
-            "default"
+            "default",
+            "develop",
+            "publish"
           ]
         }
       ]
