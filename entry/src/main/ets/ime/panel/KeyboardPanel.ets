@@ -531,7 +531,8 @@ struct KeyboardPanel {
     }
     .width('100%')
     .layoutWeight(1)
-    .padding({ left: 10, right: 10, top: 4, bottom: 8 })
+    .justifyContent(FlexAlign.SpaceBetween)
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   @Builder
@@ -1341,7 +1342,7 @@ struct KeyboardPanel {
             .height(38)
             .fontSize(13)
             .fontColor('#FFFFFF')
-            .backgroundColor('#7A835E')
+            .backgroundColor('#3366FF')
             .borderRadius(12)
             .onClick(() => {
               void imeRuntime.getSessionManager()?.insertVoiceDraft();
@@ -1401,11 +1402,11 @@ struct KeyboardPanel {
               .height(38)
               .fontSize(13)
               .fontColor('#FFFFFF')
-              .backgroundColor('#7A835E')
-              .borderRadius(12)
-              .onClick(() => {
-                void imeRuntime.getSessionManager()?.acceptPolishSuggestion();
-              })
+            .backgroundColor('#3366FF')
+            .borderRadius(12)
+            .onClick(() => {
+              void imeRuntime.getSessionManager()?.acceptPolishSuggestion();
+            })
 
             Button('保留原文')
               .layoutWeight(1)
@@ -1450,62 +1451,61 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceNineKeyKeyboard() {
-    Row({ space: 4 }) {
-      Column({ space: 4 }) {
-        this.renderPunctuationRail()
-
-        // Weight has no effect on horizontal size inside a vertical Column;
-        // the button fills the 70px column width via width('100%') in the
-        // builder. Keep weight=1 to document "single child takes natural row".
-        this.renderBottomActionKey('符号', this.showSymbolKeyboard, (): void => {
-          this.openSymbolKeyboard();
-        }, true, 1)
-      }
-      .width(70)
-      .height(this.resolveReferenceNineKeyHeight())
-
-      Column({ space: 4 }) {
+    Column() {
+      Row({ space: 4 }) {
         Column({ space: 4 }) {
-          ForEach(NINE_GRID_ROWS, (row: NineGridKeyDescriptor[]) => {
-            Row({ space: 4 }) {
-              ForEach(row, (descriptor: NineGridKeyDescriptor) => {
-                this.renderNineGridKey(descriptor)
-              }, (descriptor: NineGridKeyDescriptor): string => `${descriptor.digit}-${descriptor.label}`)
-            }
-            .width('100%')
-            .height(this.resolveReferenceNineKeyRowHeight())
-          }, (row: NineGridKeyDescriptor[]): string => `row-${row[0].digit}`)
-        }
-        .width('100%')
-        .height(this.resolveReferenceNineKeyGridHeight())
+          this.renderPunctuationRail()
 
-        Row({ space: 4 }) {
-          // Use strict 1:1:1 layout weights so the three bottom keys line up
-          // pixel-perfectly with the three grid columns above: 中/英 under
-          // column 1 (分词), 0/mic under column 2 (ABC), and 123 under column 3
-          // (DEF). Mixed non-integer weights previously drifted each key away
-          // from its grid column by a few pixels.
-          this.renderBottomActionKey(this.resolveQuickSwitchLabel(), false, (): void => {
-            this.switchQuickSubtype();
+          // Weight has no effect on horizontal size inside a vertical Column;
+          // the button fills the 70px column width via width('100%') in the
+          // builder. Keep weight=1 to document "single child takes natural row".
+          this.renderBottomActionKey('符号', this.showSymbolKeyboard, (): void => {
+            this.openSymbolKeyboard();
           }, true, 1)
-
-          this.renderVoicePadKey()
-
-          this.renderBottomActionKey('123', false, (): void => {
-            if (this.supportsTwentySixKey()) {
-              void imeRuntime.getSessionManager()?.switchKeyboardLayout('qwerty_26');
-            }
-          }, this.supportsTwentySixKey(), 1)
         }
-        .width('100%')
-      }
-      .layoutWeight(1)
-      .height(this.resolveReferenceNineKeyHeight())
+        .width(70)
+        .height(this.resolveReferenceNineKeyHeight())
 
-      Column({ space: 4 }) {
-        this.renderSideActionKey('⌫', (): void => {
-          void imeRuntime.getSessionManager()?.pressBackspace();
-        })
+        Column({ space: 4 }) {
+          Column({ space: 4 }) {
+            ForEach(NINE_GRID_ROWS, (row: NineGridKeyDescriptor[]) => {
+              Row({ space: 4 }) {
+                ForEach(row, (descriptor: NineGridKeyDescriptor) => {
+                  this.renderNineGridKey(descriptor)
+                }, (descriptor: NineGridKeyDescriptor): string => `${descriptor.digit}-${descriptor.label}`)
+              }
+              .width('100%')
+              .height(this.resolveReferenceNineKeyRowHeight())
+            }, (row: NineGridKeyDescriptor[]): string => `row-${row[0].digit}`)
+          }
+          .width('100%')
+          .height(this.resolveReferenceNineKeyGridHeight())
+
+          Row({ space: 4 }) {
+            // Use strict 1:1:1 layout weights so the three bottom keys line up
+            // pixel-perfectly with the three grid columns above: 中/英 under
+            // column 1 (分词), 0/mic under column 2 (ABC), and 123 under column 3
+            // (DEF). Mixed non-integer weights previously drifted each key away
+            // from its grid column by a few pixels.
+            this.renderBottomActionKey(this.resolveQuickSwitchLabel(), false, (): void => {
+              this.switchQuickSubtype();
+            }, true, 1)
+
+            this.renderVoicePadKey()
+
+            this.renderBottomActionKey('123', this.showSymbolKeyboard, (): void => {
+              this.openSymbolKeyboard();
+            }, true, 1)
+          }
+          .width('100%')
+        }
+        .layoutWeight(1)
+        .height(this.resolveReferenceNineKeyHeight())
+
+        Column({ space: 4 }) {
+          this.renderSideActionKey('⌫', (): void => {
+            void imeRuntime.getSessionManager()?.pressBackspace();
+          })
 
         this.renderSideActionKey('清空', (): void => {
           void imeRuntime.getSessionManager()?.clearActiveInput();
@@ -1519,8 +1519,10 @@ struct KeyboardPanel {
       .height(this.resolveReferenceNineKeyHeight())
     }
     .width('100%')
-    .height(this.resolveReferenceNineKeyHeight())
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    }
+    .layoutWeight(1)
+    .width('100%')
   }
 
   @Builder
@@ -1528,7 +1530,9 @@ struct KeyboardPanel {
     // All four rows use layoutWeight sums that add up to 10 with tighter
     // horizontal gaps, so every row renders with identical overall width and
     // each letter-weight-unit scales consistently.
-    Column({ space: 3 }) {
+    // justifyContext: SpaceBetween distributes rows evenly so the bottom row
+    // sits flush against the keyboard space bottom, matching symbol-keyboard.
+    Column() {
       // Row 1 — 10 letter keys (Q..P), weight 1 each; 9 gaps.
       Row({ space: 3 }) {
         ForEach(QWERTY_TOP_KEYS, (descriptor: QwertyKeyDescriptor) => {
@@ -1590,10 +1594,8 @@ struct KeyboardPanel {
         }, 0.8)
 
         this.renderReferenceQwertyBottomActionKey('123', (): void => {
-          if (this.supportsNineKey()) {
-            void imeRuntime.getSessionManager()?.switchKeyboardLayout('t9_9');
-          }
-        }, false, 1.1, this.supportsNineKey())
+          this.openSymbolKeyboard();
+        }, this.showSymbolKeyboard, 1.1)
 
         this.renderReferenceQwertyBottomActionKey('完成', (): void => {
           void imeRuntime.getSessionManager()?.pressEnter();
@@ -1602,13 +1604,14 @@ struct KeyboardPanel {
       .width('100%')
     }
     .width('100%')
-    .height(this.resolveReferenceQwertyHeight())
+    .layoutWeight(1)
+    .justifyContent(FlexAlign.SpaceBetween)
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   @Builder
   private renderReferenceSymbolKeyboard() {
-    Column({ space: 7 }) {
+    Column({ space: 3 }) {
       this.renderSymbolKeyRow(SYMBOL_DIGIT_ROW)
 
       if (this.symbolKeyboardMorePage) {
@@ -1622,7 +1625,7 @@ struct KeyboardPanel {
       this.renderSymbolKeyboardBottomRow()
     }
     .width('100%')
-    .height(this.resolveReferenceQwertyHeight())
+    .layoutWeight(1)
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
@@ -1671,7 +1674,7 @@ struct KeyboardPanel {
 
   @Builder
   private renderSymbolKeyRow(row: SymbolKeyDescriptor[]) {
-    Row({ space: 7 }) {
+    Row({ space: 3 }) {
       ForEach(row, (descriptor: SymbolKeyDescriptor) => {
         this.renderSymbolKeyboardKey(descriptor)
       }, (descriptor: SymbolKeyDescriptor): string => `${descriptor.role}-${descriptor.label}-${descriptor.output}`)
@@ -1682,7 +1685,7 @@ struct KeyboardPanel {
 
   @Builder
   private renderSymbolKeyboardBottomRow() {
-    Row({ space: 7 }) {
+    Row({ space: 3 }) {
       this.renderSymbolKeyboardKey({ label: '返回', output: '', role: 'return', weight: 1.55, gray: true })
       this.renderSymbolKeyboardKey({
         label: this.resolveQwertyCommaOutput(),
@@ -1748,16 +1751,16 @@ struct KeyboardPanel {
   @Builder
   private renderVoicePanel() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Column({ space: 16 }) {
+      Column({ space: 12 }) {
         Stack() {
           // Outer pulse ring: continuously expands and fades. Used for both
           // recording and LLM polishing; color and amplitude vary by state.
           Column()
-            .width(120)
-            .height(120)
-            .borderRadius(60)
+            .width(104)
+            .height(104)
+            .borderRadius(52)
             .backgroundColor(this.resolveVoicePulseColor())
-            .opacity(this.voicePulseExpanded ? 0 : (this.uiState.isPolishRunning ? 0.34 : 0.28))
+            .opacity(this.voicePulseExpanded ? 0 : (this.uiState.isPolishRunning ? 0.34 : 0.24))
             .scale({
               x: this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 1.9 : 1.7) : 1,
               y: this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 1.9 : 1.7) : 1
@@ -1765,11 +1768,11 @@ struct KeyboardPanel {
             .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
 
           Column()
-            .width(120)
-            .height(120)
-            .borderRadius(60)
+            .width(104)
+            .height(104)
+            .borderRadius(52)
             .backgroundColor(this.resolveVoicePulseColor())
-            .opacity(this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 0.28 : 0.22) : 0)
+            .opacity(this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 0.22 : 0.16) : 0)
             .scale({
               x: this.voicePulseExpanded ? 1 : (this.uiState.isPolishRunning ? 1.55 : 1.4),
               y: this.voicePulseExpanded ? 1 : (this.uiState.isPolishRunning ? 1.55 : 1.4)
@@ -1782,42 +1785,42 @@ struct KeyboardPanel {
               // status cue reads as part of the button; the surrounding
               // pulse rings still convey motion.
               Text('润色中')
-                .fontSize(16)
+                .fontSize(15)
                 .fontColor('#FFFFFF')
                 .fontWeight(FontWeight.Medium)
                 .opacity(this.voicePulseExpanded ? 1 : 0.78)
                 .animation({ duration: 1400, curve: Curve.EaseInOut, iterations: 1 })
             } else if (this.uiState.voiceState === 'recording') {
               Text('●')
-                .fontSize(48)
+                .fontSize(44)
                 .fontColor('#FFFFFF')
             } else if (this.uiState.voiceState === 'starting') {
-              this.renderIconAsset('mic', 36, 36, 0.72)
+              this.renderIconAsset('mic', 32, 32, 0.78)
             } else {
-              this.renderIconAsset('mic', 48, 48)
+              this.renderIconAsset('mic', 40, 40)
             }
           }
-          .width(120)
-          .height(120)
+          .width(104)
+          .height(104)
           .type(ButtonType.Circle)
           .backgroundColor(
-            this.uiState.voiceState === 'recording' ? '#B36D47' :
-            this.uiState.voiceState === 'starting' ? '#9A8A5E' :
-            this.uiState.voiceState === 'error' ? '#D9534F' : '#7A835E'
+            this.uiState.voiceState === 'recording' ? '#FF5252' :
+            this.uiState.voiceState === 'starting' ? '#5C7CFF' :
+            this.uiState.voiceState === 'error' ? '#EF4444' : '#3366FF'
           )
           .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
           .onClick(() => {
             this.startOrStopVoice();
           })
         }
-        .width(220)
-        .height(220)
+        .width(200)
+        .height(200)
         .alignContent(Alignment.Center)
 
         if (this.uiState.voiceState !== 'recording' && this.uiState.voiceState !== 'starting' && this.uiState.voiceStatusText.length > 0) {
           Text(this.uiState.voiceStatusText)
             .fontSize(12)
-            .fontColor(this.uiState.voiceState === 'error' ? '#D9534F' : '#606168')
+            .fontColor(this.uiState.voiceState === 'error' ? '#EF4444' : '#606168')
             .textAlign(TextAlign.Center)
         }
       }
@@ -1844,20 +1847,17 @@ struct KeyboardPanel {
           .hitTestBehavior(HitTestMode.Transparent)
       }
 
-      // Bottom-right backspace: short tap deletes one character from the
-      // host editor (mirroring the 9-key / QWERTY ⌫ key) and a long press
-      // clears the entire active input. Wrapped in a full-size Column so
-      // the circular button itself (not just its inner icon) sits in the
-      // bottom-right corner of the voice panel.
+      // Bottom-right backspace: clean pill-shaped button with icon.
+      // Short tap deletes one character, long press clears all.
       Column() {
         Button() {
-          this.renderIconAsset('backspace', 26, 22)
+          this.renderIconAsset('backspace', 22, 18)
         }
-        .width(56)
-        .height(56)
-        .type(ButtonType.Circle)
-        .backgroundColor('#FFFFFF')
-        .border({ width: 1, color: '#E4E6EA' })
+        .width(48)
+        .height(36)
+        .type(ButtonType.Normal)
+        .backgroundColor('rgba(0,0,0,0.06)')
+        .borderRadius(18)
         .onClick(() => {
           void imeRuntime.getSessionManager()?.pressBackspace();
         })
@@ -2780,18 +2780,18 @@ struct KeyboardPanel {
 
   private resolveVoicePulseColor(): string {
     if (this.uiState.voiceState === 'error') {
-      return '#D9534F';
+      return '#EF4444';
     }
     if (this.uiState.isPolishRunning) {
-      return '#92A06A';
+      return '#8B9DFF';
     }
     if (this.uiState.voiceState === 'recording') {
-      return '#B36D47';
+      return '#FF5252';
     }
     if (this.uiState.voiceState === 'starting') {
-      return '#9A8A5E';
+      return '#5C7CFF';
     }
-    return '#7A835E';
+    return '#3366FF';
   }
 
   private startOrStopVoice(): void {
