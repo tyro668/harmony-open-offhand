@@ -1,5 +1,7 @@
 import abilityAccessCtrl from '@ohos.abilityAccessCtrl';
-import { common } from '@kit.AbilityKit';
+import { bundleManager, common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { getEntryAbilityContext } from '../entryability/AbilityContextStore';
 
 const MICROPHONE_PERMISSION: 'ohos.permission.MICROPHONE' = 'ohos.permission.MICROPHONE';
 
@@ -10,6 +12,10 @@ const ERROR_ORANGE = '#C46B29';
 const TEXT_PRIMARY = '#121826';
 const TEXT_SECONDARY = '#667085';
 const DIVIDER_COLOR = '#F0F2F5';
+const PERMISSION_SYNC_RETRY_COUNT = 6;
+const PERMISSION_SYNC_RETRY_DELAY_MS = 120;
+const PERMISSION_LOG_DOMAIN = 0x0001;
+const PERMISSION_LOG_TAG = 'OffhandPermission';
 
 @Entry
 @Component
@@ -17,9 +23,21 @@ struct Index {
   @State private microphonePermissionStatus: string = '检查中';
   @State private microphonePermissionGranted: boolean = false;
   private readonly atManager = abilityAccessCtrl.createAtManager();
+  private abilityContext?: common.UIAbilityContext;
+  private cachedTokenId: number = 0;
+  private permissionListenerRegistered: boolean = false;
 
   aboutToAppear(): void {
+    void this.registerPermissionStateListener();
     void this.refreshMicrophonePermissionStatus();
+  }
+
+  onPageShow(): void {
+    void this.refreshMicrophonePermissionStatus();
+  }
+
+  aboutToDisappear(): void {
+    this.unregisterPermissionStateListener();
   }
 
   build() {
@@ -217,8 +235,10 @@ struct Index {
         .textAlign(TextAlign.Start)
         .padding({ top: 20 })
 
-      Row({ space: 12 }) {
-        this.renderStatusPill(this.resolvePermissionLabel(), this.resolvePermissionColor())
+      Row({ space: 8 }) {
+        this.renderStatusPill()
+
+        this.renderRefreshButton()
 
         if (this.shouldShowMicrophonePermissionButton()) {
           Blank()
@@ -236,18 +256,18 @@ struct Index {
   }
 
   @Builder
-  private renderStatusPill(label: string, color: string) {
+  private renderStatusPill() {
     Row({ space: 6 }) {
       Column()
         .width(8)
         .height(8)
         .borderRadius(4)
-        .backgroundColor(color)
+        .backgroundColor(this.resolvePermissionColor())
 
-      Text(label)
+      Text(this.resolvePermissionLabel())
         .fontSize(13)
         .fontWeight(FontWeight.Medium)
-        .fontColor(color)
+        .fontColor(this.resolvePermissionColor())
     }
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
     .backgroundColor('#F7FAFD')
@@ -268,6 +288,23 @@ struct Index {
       .onClick((): void => {
         action();
       })
+  }
+
+  @Builder
+  private renderRefreshButton() {
+    Button() {
+      Text('↻')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(TEXT_SECONDARY)
+    }
+    .width(32)
+    .height(32)
+    .backgroundColor('#F7FAFD')
+    .borderRadius(16)
+    .onClick((): void => {
+      void this.refreshMicrophonePermissionStatus();
+    })
   }
 
   private resolvePermissionLabel(): string {
@@ -301,48 +338,177 @@ struct Index {
   }
 
   private async requestMicrophonePermission(): Promise<void> {
-    let hostContext = this.resolveHostContext() as common.UIAbilityContext | undefined;
+    let hostContext = this.resolveHostContext();
     if (!hostContext) {
-      this.microphonePermissionGranted = false;
-      this.microphonePermissionStatus = '不可用';
+      this.setPermissionState(false, '不可用');
       return;
     }
     this.microphonePermissionStatus = '请求中';
     try {
       let result = await this.atManager.requestPermissionsFromUser(hostContext, [MICROPHONE_PERMISSION]);
-      let granted = result.authResults.some((value: number): boolean => {
-        return value === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
-      });
-      this.microphonePermissionGranted = granted;
-      this.microphonePermissionStatus = granted ? '已授权' : '未授权';
+      let requestGranted = this.hasGrantedAuthResult(result.authResults);
+      let dialogShown = this.wasPermissionDialogShown(result.dialogShownResults);
+      // 用户此前已选"禁止并不再询问"时，requestPermissionsFromUser 不再弹窗，
+      // 需要改用 requestPermissionOnSetting 跳转到系统设置中开启
+      if (!requestGranted && !dialogShown) {
+        try {
+          let settingStatus = await this.atManager.requestPermissionOnSetting(
+            hostContext, [MICROPHONE_PERMISSION]);
+          requestGranted = settingStatus.some((value: abilityAccessCtrl.GrantStatus): boolean => {
+            return value === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+          });
+        } catch (error) {
+          hilog.warn(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+            'requestPermissionOnSetting failed: %{public}s', JSON.stringify(error));
+        }
+      }
+      this.setPermissionState(requestGranted, requestGranted ? '已授权' : '未授权');
+      let syncedGranted = await this.waitForMicrophonePermissionStatus(requestGranted);
+      this.setPermissionState(syncedGranted, syncedGranted ? '已授权' : '未授权');
     } catch (_) {
-      this.microphonePermissionGranted = false;
-      this.microphonePermissionStatus = '请求失败';
+      this.setPermissionState(false, '请求失败');
     }
-    await this.refreshMicrophonePermissionStatus(hostContext);
   }
 
-  private async refreshMicrophonePermissionStatus(context?: common.Context): Promise<void> {
-    let hostContext = (context ?? this.resolveHostContext()) as common.UIAbilityContext | undefined;
-    if (!hostContext) {
-      this.microphonePermissionGranted = false;
-      this.microphonePermissionStatus = '不可用';
+  private wasPermissionDialogShown(dialogShownResults?: Array<boolean>): boolean {
+    if (!dialogShownResults) {
+      return false;
+    }
+    return dialogShownResults.some((value: boolean): boolean => {
+      return value === true;
+    });
+  }
+
+  private async refreshMicrophonePermissionStatus(_context?: common.Context): Promise<void> {
+    try {
+      let tokenId = await this.resolveAccessTokenId();
+      if (tokenId <= 0) {
+        this.setPermissionState(false, '不可用');
+        return;
+      }
+      let granted = this.queryMicrophoneGrantedSync(tokenId);
+      hilog.info(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+        'refresh tokenId=%{public}d granted=%{public}s', tokenId, granted ? 'true' : 'false');
+      this.setPermissionState(granted, granted ? '已授权' : '未授权');
+    } catch (error) {
+      hilog.warn(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+        'refresh failed: %{public}s', JSON.stringify(error));
+      this.setPermissionState(false, '未授权');
+    }
+  }
+
+  private hasGrantedAuthResult(authResults: Array<number>): boolean {
+    return authResults.some((value: number): boolean => {
+      return value === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    });
+  }
+
+  private async waitForMicrophonePermissionStatus(fallbackGranted: boolean): Promise<boolean> {
+    let tokenId = await this.resolveAccessTokenId();
+    if (tokenId <= 0) {
+      return fallbackGranted;
+    }
+    for (let retryIndex = 0; retryIndex < PERMISSION_SYNC_RETRY_COUNT; retryIndex++) {
+      if (this.queryMicrophoneGrantedSync(tokenId)) {
+        return true;
+      }
+      await this.delay(PERMISSION_SYNC_RETRY_DELAY_MS);
+    }
+    return fallbackGranted;
+  }
+
+  private queryMicrophoneGrantedSync(tokenId: number): boolean {
+    try {
+      return this.atManager.checkAccessTokenSync(tokenId, MICROPHONE_PERMISSION) ===
+        abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+    } catch (error) {
+      hilog.warn(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+        'checkAccessTokenSync failed: %{public}s', JSON.stringify(error));
+      return false;
+    }
+  }
+
+  private async resolveAccessTokenId(): Promise<number> {
+    if (this.cachedTokenId > 0) {
+      return this.cachedTokenId;
+    }
+    // 先走同进程 context 快路径，避免某些设备上 bundleManager.getBundleInfoForSelf 迟迟不返回
+    let hostContext = this.resolveHostContext();
+    if (hostContext) {
+      try {
+        let tokenId = hostContext.applicationInfo.accessTokenId;
+        if (tokenId > 0) {
+          this.cachedTokenId = tokenId;
+          return tokenId;
+        }
+      } catch (error) {
+        hilog.warn(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+          'context.applicationInfo failed: %{public}s', JSON.stringify(error));
+      }
+    }
+    try {
+      let bundleInfo = await bundleManager.getBundleInfoForSelf(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_WITH_APPLICATION
+      );
+      let tokenId = bundleInfo.appInfo.accessTokenId;
+      if (tokenId > 0) {
+        this.cachedTokenId = tokenId;
+        return tokenId;
+      }
+    } catch (error) {
+      hilog.warn(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+        'getBundleInfoForSelf failed: %{public}s', JSON.stringify(error));
+    }
+    return 0;
+  }
+
+  private async registerPermissionStateListener(): Promise<void> {
+    if (this.permissionListenerRegistered) {
       return;
     }
     try {
-      let grantStatus = this.atManager.checkAccessTokenSync(
-        hostContext.applicationInfo.accessTokenId,
-        MICROPHONE_PERMISSION
-      );
-      this.microphonePermissionGranted = grantStatus === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
-      this.microphonePermissionStatus = this.microphonePermissionGranted ? '已授权' : '未授权';
-    } catch (_) {
-      this.microphonePermissionGranted = false;
-      this.microphonePermissionStatus = '未授权';
+      this.atManager.on('selfPermissionStateChange', [MICROPHONE_PERMISSION],
+        (data: abilityAccessCtrl.PermissionStateChangeInfo): void => {
+          let granted = data.change === abilityAccessCtrl.PermissionStateChangeType.PERMISSION_GRANTED_OPER;
+          hilog.info(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+            'selfPermissionStateChange permission=%{public}s granted=%{public}s',
+            data.permissionName, granted ? 'true' : 'false');
+          this.setPermissionState(granted, granted ? '已授权' : '未授权');
+        });
+      this.permissionListenerRegistered = true;
+    } catch (error) {
+      hilog.warn(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+        'register selfPermissionStateChange failed: %{public}s', JSON.stringify(error));
     }
   }
 
-  private resolveHostContext(): common.Context | undefined {
-    return this.getUIContext().getHostContext() as common.Context | undefined;
+  private unregisterPermissionStateListener(): void {
+    if (!this.permissionListenerRegistered) {
+      return;
+    }
+    try {
+      this.atManager.off('selfPermissionStateChange', [MICROPHONE_PERMISSION]);
+    } catch (_) {
+    }
+    this.permissionListenerRegistered = false;
+  }
+
+  private setPermissionState(granted: boolean, status: string): void {
+    this.microphonePermissionGranted = granted;
+    this.microphonePermissionStatus = status;
+  }
+
+  private async delay(milliseconds: number): Promise<void> {
+    await new Promise<void>((resolve): void => {
+      setTimeout(resolve, milliseconds);
+    });
+  }
+
+  private resolveHostContext(): common.UIAbilityContext | undefined {
+    if (this.abilityContext) {
+      return this.abilityContext;
+    }
+    this.abilityContext = getEntryAbilityContext();
+    return this.abilityContext;
   }
 }
