@@ -35,6 +35,206 @@
     {
       "name": "perm_reason_keep_bg",
       "value": "Used to keep voice recognition sessions stable during long dictation."
+    },
+    {
+      "name": "settings_entry_title",
+      "value": "Keyboard settings"
+    },
+    {
+      "name": "settings_entry_hint",
+      "value": "Open settings from the top-left corner of the keyboard."
+    },
+    {
+      "name": "settings_enable_ime_title",
+      "value": "Enable input method"
+    },
+    {
+      "name": "settings_enable_ime_hint",
+      "value": "Open system settings, then go to System > Input method to enable or switch input methods."
+    },
+    {
+      "name": "settings_go_to_settings",
+      "value": "Settings"
+    },
+    {
+      "name": "settings_microphone_title",
+      "value": "Microphone permission"
+    },
+    {
+      "name": "settings_authorize",
+      "value": "Allow"
+    },
+    {
+      "name": "permission_granted",
+      "value": "Allowed"
+    },
+    {
+      "name": "permission_checking",
+      "value": "Checking"
+    },
+    {
+      "name": "permission_request_failed",
+      "value": "Request failed"
+    },
+    {
+      "name": "permission_not_granted",
+      "value": "Not allowed"
+    },
+    {
+      "name": "ime_settings_tab_input",
+      "value": "Input"
+    },
+    {
+      "name": "ime_settings_tab_common",
+      "value": "Settings"
+    },
+    {
+      "name": "ime_input_mode_pinyin",
+      "value": "Pinyin"
+    },
+    {
+      "name": "ime_input_mode_english",
+      "value": "English"
+    },
+    {
+      "name": "ime_input_mode_voice",
+      "value": "Voice"
+    },
+    {
+      "name": "ime_builtin_asr",
+      "value": "System speech recognition"
+    },
+    {
+      "name": "ime_voice_auto_polish",
+      "value": "Polish voice text"
+    },
+    {
+      "name": "ime_voice_auto_polish_enable",
+      "value": "Enable voice text polishing"
+    },
+    {
+      "name": "ime_voice_auto_polish_on_hint",
+      "value": "Polish recognized voice text with the model below."
+    },
+    {
+      "name": "ime_voice_auto_polish_off_hint",
+      "value": "Keep recognized voice text as-is."
+    },
+    {
+      "name": "ime_settings_off",
+      "value": "Off"
+    },
+    {
+      "name": "ime_model_provider",
+      "value": "Model provider"
+    },
+    {
+      "name": "ime_current_model",
+      "value": "Current model"
+    },
+    {
+      "name": "ime_no_model_available",
+      "value": "(No model available for this provider)"
+    },
+    {
+      "name": "ime_not_selected",
+      "value": "Not selected"
+    },
+    {
+      "name": "ime_api_key_placeholder",
+      "value": "Paste API Key"
+    },
+    {
+      "name": "ime_action_paste",
+      "value": "Paste"
+    },
+    {
+      "name": "ime_action_clear",
+      "value": "Clear"
+    },
+    {
+      "name": "ime_action_insert",
+      "value": "Insert"
+    },
+    {
+      "name": "ime_action_apply",
+      "value": "Apply"
+    },
+    {
+      "name": "ime_action_keep_original",
+      "value": "Keep original"
+    },
+    {
+      "name": "ime_action_undo",
+      "value": "Undo"
+    },
+    {
+      "name": "ime_voice_draft_title",
+      "value": "Voice draft"
+    },
+    {
+      "name": "ime_voice_draft_hint",
+      "value": "Review before inserting"
+    },
+    {
+      "name": "ime_polish_suggestion_title",
+      "value": "Polish suggestion"
+    },
+    {
+      "name": "ime_polish_applied",
+      "value": "Polished text applied."
+    },
+    {
+      "name": "ime_polishing",
+      "value": "Polishing"
+    },
+    {
+      "name": "ime_voice_status_idle",
+      "value": "Voice input ready"
+    },
+    {
+      "name": "ime_voice_status_unavailable",
+      "value": "Voice input unavailable"
+    },
+    {
+      "name": "ime_voice_status_no_speech",
+      "value": "No speech detected"
+    },
+    {
+      "name": "ime_voice_status_processing",
+      "value": "Transcribing voice input..."
+    },
+    {
+      "name": "ime_voice_status_preparing",
+      "value": "Preparing voice input..."
+    },
+    {
+      "name": "ime_voice_status_stopping",
+      "value": "Stopping voice input..."
+    },
+    {
+      "name": "ime_voice_status_polishing",
+      "value": "Polishing transcript..."
+    },
+    {
+      "name": "ime_voice_status_failed",
+      "value": "Voice recognition failed"
+    },
+    {
+      "name": "ime_voice_status_permission_denied",
+      "value": "Microphone permission denied"
+    },
+    {
+      "name": "ime_candidate_return",
+      "value": "Return"
+    },
+    {
+      "name": "ime_candidate_mode_full",
+      "value": "All"
+    },
+    {
+      "name": "ime_candidate_mode_single",
+      "value": "/Single"
     }
   ]
 }

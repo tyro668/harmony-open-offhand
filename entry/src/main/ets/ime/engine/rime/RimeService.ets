@@ -26,8 +26,8 @@ interface NativeRimeBridgeModule {
   clearComposition(sessionId: string): string;
   commitComposition(sessionId: string): string;
   setInput(sessionId: string, input: string): string;
-  pageUp(sessionId: string): string;
-  pageDown(sessionId: string): string;
+  pageUp(sessionId: string, targetPageNo?: number): string;
+  pageDown(sessionId: string, targetPageNo?: number): string;
   syncUserData(): string;
 }
 
@@ -147,12 +147,12 @@ export class RimeService {
     return state;
   }
 
-  pageUp(sessionId: string): RimeState {
-    return this.parseRimeState(bridge.pageUp(sessionId));
+  pageUp(sessionId: string, targetPageNo: number = -1): RimeState {
+    return this.parseRimeState(bridge.pageUp(sessionId, targetPageNo));
   }
 
-  pageDown(sessionId: string): RimeState {
-    return this.parseRimeState(bridge.pageDown(sessionId));
+  pageDown(sessionId: string, targetPageNo: number = -1): RimeState {
+    return this.parseRimeState(bridge.pageDown(sessionId, targetPageNo));
   }
 
   syncUserData(): void {

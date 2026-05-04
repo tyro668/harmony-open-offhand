@@ -35,6 +35,206 @@
     {
       "name": "perm_reason_keep_bg",
       "value": "用于在长时间语音输入期间保持识别会话稳定。"
+    },
+    {
+      "name": "settings_entry_title",
+      "value": "输入法内的配置"
+    },
+    {
+      "name": "settings_entry_hint",
+      "value": "在键盘左上角打开配置。"
+    },
+    {
+      "name": "settings_enable_ime_title",
+      "value": "启用输入法"
+    },
+    {
+      "name": "settings_enable_ime_hint",
+      "value": "打开系统设置，进入「系统 → 输入法」启用或切换输入法"
+    },
+    {
+      "name": "settings_go_to_settings",
+      "value": "前往设置"
+    },
+    {
+      "name": "settings_microphone_title",
+      "value": "麦克风权限配置"
+    },
+    {
+      "name": "settings_authorize",
+      "value": "授权"
+    },
+    {
+      "name": "permission_granted",
+      "value": "已授权"
+    },
+    {
+      "name": "permission_checking",
+      "value": "检查中"
+    },
+    {
+      "name": "permission_request_failed",
+      "value": "请求失败"
+    },
+    {
+      "name": "permission_not_granted",
+      "value": "未授权"
+    },
+    {
+      "name": "ime_settings_tab_input",
+      "value": "输入"
+    },
+    {
+      "name": "ime_settings_tab_common",
+      "value": "配置"
+    },
+    {
+      "name": "ime_input_mode_pinyin",
+      "value": "拼音"
+    },
+    {
+      "name": "ime_input_mode_english",
+      "value": "英文"
+    },
+    {
+      "name": "ime_input_mode_voice",
+      "value": "语音"
+    },
+    {
+      "name": "ime_builtin_asr",
+      "value": "系统内置语音识别"
+    },
+    {
+      "name": "ime_voice_auto_polish",
+      "value": "语音后自动润色"
+    },
+    {
+      "name": "ime_voice_auto_polish_enable",
+      "value": "开启语音后自动润色"
+    },
+    {
+      "name": "ime_voice_auto_polish_on_hint",
+      "value": "使用下方大模型配置润色语音识别文本"
+    },
+    {
+      "name": "ime_voice_auto_polish_off_hint",
+      "value": "关闭后直接保留语音识别文本"
+    },
+    {
+      "name": "ime_settings_off",
+      "value": "已关闭"
+    },
+    {
+      "name": "ime_model_provider",
+      "value": "模型提供商"
+    },
+    {
+      "name": "ime_current_model",
+      "value": "当前模型"
+    },
+    {
+      "name": "ime_no_model_available",
+      "value": "（该供应商暂无可用模型）"
+    },
+    {
+      "name": "ime_not_selected",
+      "value": "未选择"
+    },
+    {
+      "name": "ime_api_key_placeholder",
+      "value": "粘贴 API Key"
+    },
+    {
+      "name": "ime_action_paste",
+      "value": "粘贴"
+    },
+    {
+      "name": "ime_action_clear",
+      "value": "清空"
+    },
+    {
+      "name": "ime_action_insert",
+      "value": "插入"
+    },
+    {
+      "name": "ime_action_apply",
+      "value": "应用"
+    },
+    {
+      "name": "ime_action_keep_original",
+      "value": "保留原文"
+    },
+    {
+      "name": "ime_action_undo",
+      "value": "撤销"
+    },
+    {
+      "name": "ime_voice_draft_title",
+      "value": "语音草稿"
+    },
+    {
+      "name": "ime_voice_draft_hint",
+      "value": "先确认，再插入"
+    },
+    {
+      "name": "ime_polish_suggestion_title",
+      "value": "润色建议"
+    },
+    {
+      "name": "ime_polish_applied",
+      "value": "已应用润色结果。"
+    },
+    {
+      "name": "ime_polishing",
+      "value": "润色中"
+    },
+    {
+      "name": "ime_voice_status_idle",
+      "value": "语音输入已就绪"
+    },
+    {
+      "name": "ime_voice_status_unavailable",
+      "value": "语音输入不可用"
+    },
+    {
+      "name": "ime_voice_status_no_speech",
+      "value": "未检测到语音"
+    },
+    {
+      "name": "ime_voice_status_processing",
+      "value": "正在识别语音..."
+    },
+    {
+      "name": "ime_voice_status_preparing",
+      "value": "正在准备语音输入..."
+    },
+    {
+      "name": "ime_voice_status_stopping",
+      "value": "正在停止语音输入..."
+    },
+    {
+      "name": "ime_voice_status_polishing",
+      "value": "正在润色识别文本..."
+    },
+    {
+      "name": "ime_voice_status_failed",
+      "value": "语音识别失败"
+    },
+    {
+      "name": "ime_voice_status_permission_denied",
+      "value": "麦克风权限未授权"
+    },
+    {
+      "name": "ime_candidate_return",
+      "value": "返回"
+    },
+    {
+      "name": "ime_candidate_mode_full",
+      "value": "全"
+    },
+    {
+      "name": "ime_candidate_mode_single",
+      "value": "/单"
     }
   ]
 }

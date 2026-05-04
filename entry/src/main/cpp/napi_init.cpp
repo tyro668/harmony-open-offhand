@@ -217,28 +217,36 @@ napi_value SetInput(napi_env env, napi_callback_info info)
 
 napi_value PageUp(napi_env env, napi_callback_info info)
 {
-    size_t argc = 1;
-    napi_value args[1] = {nullptr};
+    size_t argc = 2;
+    napi_value args[2] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     std::string session_id;
     if (argc < 1 || !ReadStringArg(env, args[0], session_id)) {
         napi_throw_type_error(env, nullptr, "pageUp expects sessionId");
         return nullptr;
     }
-    return CreateUtf8(env, offhand::rime::PageUpJson(session_id));
+    int32_t target_page_no = -1;
+    if (argc >= 2) {
+        ReadInt32Arg(env, args[1], target_page_no);
+    }
+    return CreateUtf8(env, offhand::rime::PageUpJson(session_id, target_page_no));
 }
 
 napi_value PageDown(napi_env env, napi_callback_info info)
 {
-    size_t argc = 1;
-    napi_value args[1] = {nullptr};
+    size_t argc = 2;
+    napi_value args[2] = {nullptr};
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     std::string session_id;
     if (argc < 1 || !ReadStringArg(env, args[0], session_id)) {
         napi_throw_type_error(env, nullptr, "pageDown expects sessionId");
         return nullptr;
     }
-    return CreateUtf8(env, offhand::rime::PageDownJson(session_id));
+    int32_t target_page_no = -1;
+    if (argc >= 2) {
+        ReadInt32Arg(env, args[1], target_page_no);
+    }
+    return CreateUtf8(env, offhand::rime::PageDownJson(session_id, target_page_no));
 }
 
 napi_value SyncUserData(napi_env env, napi_callback_info info)

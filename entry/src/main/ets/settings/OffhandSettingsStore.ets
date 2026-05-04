@@ -452,14 +452,15 @@ export function createDefaultRuntimeSettings(): OffhandRuntimeSettings {
 export function cloneRuntimeSettings(source: OffhandRuntimeSettings): OffhandRuntimeSettings {
   let selection = resolveBuiltinModelSelection(source.llmProviderId, source.llmPresetId);
   let entryMode = normalizeEntryMode(source.defaultEntryMode);
+  let autoVoicePolishEnabled = source.enableCloudPolish && source.autoPolishVoiceResult;
   return {
     enablePreviewText: source.enablePreviewText,
-    enableVoice: source.enableVoice,
+    enableVoice: true,
     enableBuiltinAsr: source.enableBuiltinAsr,
-    enableCloudPolish: source.enableCloudPolish,
+    enableCloudPolish: autoVoicePolishEnabled,
     enablePersonalization: source.enablePersonalization,
     autoInsertVoiceResult: source.autoInsertVoiceResult,
-    autoPolishVoiceResult: source.autoPolishVoiceResult,
+    autoPolishVoiceResult: autoVoicePolishEnabled,
     asrEndpoint: source.asrEndpoint,
     llmProviderId: selection.provider.providerId,
     llmPresetId: selection.preset.presetId,
@@ -554,17 +555,19 @@ function normalizeRuntimeSettings(raw: string): OffhandRuntimeSettings {
     let defaults = createDefaultRuntimeSettings();
     let selection = resolveBuiltinModelSelection(parsed.llmProviderId, parsed.llmPresetId);
     let entryMode = normalizeEntryMode(parsed.defaultEntryMode);
+    let autoVoicePolishEnabled =
+      (parsed.enableCloudPolish !== undefined ? parsed.enableCloudPolish : defaults.enableCloudPolish) &&
+      (parsed.autoPolishVoiceResult !== undefined ? parsed.autoPolishVoiceResult : defaults.autoPolishVoiceResult);
     return {
       enablePreviewText: parsed.enablePreviewText !== undefined ? parsed.enablePreviewText : defaults.enablePreviewText,
-      enableVoice: parsed.enableVoice !== undefined ? parsed.enableVoice : defaults.enableVoice,
+      enableVoice: true,
       enableBuiltinAsr: parsed.enableBuiltinAsr !== undefined ? parsed.enableBuiltinAsr : defaults.enableBuiltinAsr,
-      enableCloudPolish: parsed.enableCloudPolish !== undefined ? parsed.enableCloudPolish : defaults.enableCloudPolish,
+      enableCloudPolish: autoVoicePolishEnabled,
       enablePersonalization: parsed.enablePersonalization !== undefined ?
         parsed.enablePersonalization : defaults.enablePersonalization,
       autoInsertVoiceResult: parsed.autoInsertVoiceResult !== undefined ?
         parsed.autoInsertVoiceResult : defaults.autoInsertVoiceResult,
-      autoPolishVoiceResult: parsed.autoPolishVoiceResult !== undefined ?
-        parsed.autoPolishVoiceResult : defaults.autoPolishVoiceResult,
+      autoPolishVoiceResult: autoVoicePolishEnabled,
       asrEndpoint: typeof parsed.asrEndpoint === 'string' ? parsed.asrEndpoint.trim() : defaults.asrEndpoint,
       llmProviderId: selection.provider.providerId,
       llmPresetId: selection.preset.presetId,

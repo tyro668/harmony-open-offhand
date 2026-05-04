@@ -1,5 +1,5 @@
 import abilityAccessCtrl from '@ohos.abilityAccessCtrl';
-import { bundleManager, common } from '@kit.AbilityKit';
+import { bundleManager, common, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { getEntryAbilityContext } from '../entryability/AbilityContextStore';
 
@@ -16,6 +16,53 @@ const PERMISSION_SYNC_RETRY_COUNT = 6;
 const PERMISSION_SYNC_RETRY_DELAY_MS = 120;
 const PERMISSION_LOG_DOMAIN = 0x0001;
 const PERMISSION_LOG_TAG = 'OffhandPermission';
+const ILLUSTRATION_KEY_GAP = 4;
+const ILLUSTRATION_ROW_GAP = 6;
+const ILLUSTRATION_KEY_HEIGHT = 38;
+const ILLUSTRATION_TOOLBAR_HEIGHT = 40;
+const ILLUSTRATION_KEY_RADIUS = 8;
+
+interface IllustrationKeyDescriptor {
+  label: string;
+  hint: string;
+  weight: number;
+  gray: boolean;
+}
+
+const ILLUSTRATION_TOP_KEYS: IllustrationKeyDescriptor[] = [
+  { label: 'Q', hint: '1', weight: 1, gray: false },
+  { label: 'W', hint: '2', weight: 1, gray: false },
+  { label: 'E', hint: '3', weight: 1, gray: false },
+  { label: 'R', hint: '4', weight: 1, gray: false },
+  { label: 'T', hint: '5', weight: 1, gray: false },
+  { label: 'Y', hint: '6', weight: 1, gray: false },
+  { label: 'U', hint: '7', weight: 1, gray: false },
+  { label: 'I', hint: '8', weight: 1, gray: false },
+  { label: 'O', hint: '9', weight: 1, gray: false },
+  { label: 'P', hint: '0', weight: 1, gray: false }
+];
+
+const ILLUSTRATION_MIDDLE_KEYS: IllustrationKeyDescriptor[] = [
+  { label: 'A', hint: '~', weight: 1, gray: false },
+  { label: 'S', hint: '@', weight: 1, gray: false },
+  { label: 'D', hint: '#', weight: 1, gray: false },
+  { label: 'F', hint: '$', weight: 1, gray: false },
+  { label: 'G', hint: '%', weight: 1, gray: false },
+  { label: 'H', hint: '&', weight: 1, gray: false },
+  { label: 'J', hint: '*', weight: 1, gray: false },
+  { label: 'K', hint: '(', weight: 1, gray: false },
+  { label: 'L', hint: ')', weight: 1, gray: false }
+];
+
+const ILLUSTRATION_BOTTOM_KEYS: IllustrationKeyDescriptor[] = [
+  { label: 'Z', hint: '\'', weight: 1, gray: false },
+  { label: 'X', hint: '/', weight: 1, gray: false },
+  { label: 'C', hint: '-', weight: 1, gray: false },
+  { label: 'V', hint: '_', weight: 1, gray: false },
+  { label: 'B', hint: ':', weight: 1, gray: false },
+  { label: 'N', hint: ';', weight: 1, gray: false },
+  { label: 'M', hint: '`', weight: 1, gray: false }
+];
 
 @Entry
 @Component
@@ -42,28 +89,16 @@ struct Index {
 
   build() {
     Column() {
-      this.renderHeader()
-      this.renderDivider()
       this.renderEntrySection()
+      this.renderDivider()
+      this.renderImeSettingsSection()
       this.renderDivider()
       this.renderPermissionSection()
     }
     .width('100%')
     .height('100%')
     .backgroundColor(PAGE_BACKGROUND)
-    .padding({ left: 20, right: 20, top: 28 })
-  }
-
-  @Builder
-  private renderHeader() {
-    Row() {
-      Text('配置')
-        .fontSize(28)
-        .fontWeight(FontWeight.Bold)
-        .fontColor(TEXT_PRIMARY)
-    }
-    .width('100%')
-    .padding({ bottom: 20 })
+    .padding({ left: 20, right: 20, top: 20 })
   }
 
   @Builder
@@ -77,7 +112,7 @@ struct Index {
   @Builder
   private renderEntrySection() {
     Column({ space: 16 }) {
-      Text('输入法内配置')
+      Text($r('app.string.settings_entry_title'))
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT_PRIMARY)
@@ -87,7 +122,7 @@ struct Index {
 
       this.renderKeyboardIllustration()
 
-      Text('在键盘左上角打开配置。')
+      Text($r('app.string.settings_entry_hint'))
         .fontSize(14)
         .fontColor(TEXT_SECONDARY)
         .width('100%')
@@ -100,134 +135,337 @@ struct Index {
 
   @Builder
   private renderKeyboardIllustration() {
-    Column({ space: 3 }) {
-      Row() {
-        Column() {
-          Image($r('app.media.ime_icon_settings_gear'))
-            .width(24)
-            .height(24)
-            .objectFit(ImageFit.Contain)
-        }
-        .width(36)
-        .height(32)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-        .borderRadius(10)
-        .backgroundColor(PRIMARY_BLUE)
-        .opacity(0.12)
-
-        Blank()
-
-        Row({ space: 8 }) {
-          Column() {
-            Image($r('app.media.ime_icon_feature_mic'))
-              .width(22)
-              .height(22)
-              .objectFit(ImageFit.Contain)
-              .opacity(0.45)
-          }
-          .width(34)
-          .height(32)
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Center)
-
-          Column()
-            .width(1)
-            .height(24)
-            .backgroundColor('#C5C8CF')
-
-          Column() {
-            Image($r('app.media.ime_icon_feature_chevron_down'))
-              .width(22)
-              .height(22)
-              .objectFit(ImageFit.Contain)
-              .opacity(0.45)
-          }
-          .width(34)
-          .height(32)
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Center)
-        }
-      }
-      .width('100%')
-      .padding({ left: 6, right: 6 })
-      .alignItems(VerticalAlign.Center)
-
-      Row({ space: 2 }) {
-        ForEach(['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'], (key: string) => {
-          Text(key)
-            .fontSize(10)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#17181C')
-            .layoutWeight(1)
-            .height(26)
-            .textAlign(TextAlign.Center)
-            .borderRadius(5)
-            .backgroundColor('#FFFFFF')
-        })
-      }
-      .width('100%')
-
-      Row({ space: 2 }) {
-        Column().layoutWeight(0.5)
-        ForEach(['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'], (key: string) => {
-          Text(key)
-            .fontSize(10)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#17181C')
-            .layoutWeight(1)
-            .height(26)
-            .textAlign(TextAlign.Center)
-            .borderRadius(5)
-            .backgroundColor('#FFFFFF')
-        })
-        Column().layoutWeight(0.5)
-      }
-      .width('100%')
-
-      Row({ space: 2 }) {
-        Text('⇧')
-          .fontSize(10)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#17181C')
-          .layoutWeight(1.5)
-          .height(26)
-          .textAlign(TextAlign.Center)
-          .borderRadius(5)
-          .backgroundColor('#C9CAD3')
-        ForEach(['Z', 'X', 'C', 'V', 'B', 'N', 'M'], (key: string) => {
-          Text(key)
-            .fontSize(10)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#17181C')
-            .layoutWeight(1)
-            .height(26)
-            .textAlign(TextAlign.Center)
-            .borderRadius(5)
-            .backgroundColor('#FFFFFF')
-        })
-        Text('⌫')
-          .fontSize(10)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#17181C')
-          .layoutWeight(1.5)
-          .height(26)
-          .textAlign(TextAlign.Center)
-          .borderRadius(5)
-          .backgroundColor('#C9CAD3')
-      }
-      .width('100%')
+    Column({ space: ILLUSTRATION_ROW_GAP }) {
+      this.renderIllustrationToolbar()
+      this.renderIllustrationKeyRow(ILLUSTRATION_TOP_KEYS)
+      this.renderIllustrationMiddleKeyRow()
+      this.renderIllustrationBottomLetterRow()
+      this.renderIllustrationBottomActionRow()
     }
     .width('100%')
-    .padding({ top: 6, bottom: 8, left: 8, right: 8 })
+    .padding({ top: 4, bottom: 7, left: 8, right: 8 })
     .backgroundColor('#D9DCE2')
     .borderRadius(10)
+    .clip(true)
+  }
+
+  @Builder
+  private renderIllustrationToolbar() {
+    Row() {
+      this.renderIllustrationToolbarIcon('gear', 34, 30, 26, 26, 1)
+
+      Blank()
+
+      Row({ space: 8 }) {
+        this.renderIllustrationToolbarIcon('mic', 32, 30, 23, 23, 0.76)
+
+        Column()
+          .width(1)
+          .height(24)
+          .backgroundColor('#C5C8CF')
+
+        this.renderIllustrationToolbarIcon('chevron', 32, 30, 24, 24, 0.78)
+      }
+      .height('100%')
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(ILLUSTRATION_TOOLBAR_HEIGHT)
+    .padding({ left: 0, right: 0 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  private renderIllustrationToolbarIcon(kind: string, buttonWidth: number, buttonHeight: number,
+    iconWidth: number, iconHeight: number, opacity: number) {
+    Column() {
+      this.renderIllustrationIcon(kind, iconWidth, iconHeight, opacity)
+    }
+    .width(buttonWidth)
+    .height(buttonHeight)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
+  private renderIllustrationKeyRow(keys: IllustrationKeyDescriptor[]) {
+    Row({ space: ILLUSTRATION_KEY_GAP }) {
+      ForEach(keys, (descriptor: IllustrationKeyDescriptor) => {
+        this.renderIllustrationLetterKey(descriptor)
+      }, (descriptor: IllustrationKeyDescriptor): string => `${descriptor.label}-${descriptor.hint}`)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private renderIllustrationMiddleKeyRow() {
+    Row({ space: ILLUSTRATION_KEY_GAP }) {
+      Column().layoutWeight(0.5)
+      ForEach(ILLUSTRATION_MIDDLE_KEYS, (descriptor: IllustrationKeyDescriptor) => {
+        this.renderIllustrationLetterKey(descriptor)
+      }, (descriptor: IllustrationKeyDescriptor): string => `${descriptor.label}-${descriptor.hint}`)
+      Column().layoutWeight(0.5)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private renderIllustrationBottomLetterRow() {
+    Row({ space: ILLUSTRATION_KEY_GAP }) {
+      this.renderIllustrationIconKey('shift', 1.5)
+      ForEach(ILLUSTRATION_BOTTOM_KEYS, (descriptor: IllustrationKeyDescriptor) => {
+        this.renderIllustrationLetterKey(descriptor)
+      }, (descriptor: IllustrationKeyDescriptor): string => `${descriptor.label}-${descriptor.hint}`)
+      this.renderIllustrationIconKey('backspace', 1.5)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private renderIllustrationBottomActionRow() {
+    Row({ space: ILLUSTRATION_KEY_GAP }) {
+      this.renderIllustrationActionKey('符号', 1.64)
+      this.renderIllustrationActionKey('中/英', 1.2)
+      this.renderIllustrationPunctuationKey('，', '!', 1)
+      this.renderIllustrationSpaceKey(2.95)
+      this.renderIllustrationPunctuationKey('。', '?', 1)
+      this.renderIllustrationActionKey('123', 1.2)
+      this.renderIllustrationActionKey('换行', 1.64)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private renderIllustrationLetterKey(descriptor: IllustrationKeyDescriptor) {
+    Column({ space: 0 }) {
+      Text(descriptor.hint)
+        .fontSize(8)
+        .fontColor('#8F9299')
+        .maxLines(1)
+
+      Text(descriptor.label)
+        .fontSize(17)
+        .minFontSize(12)
+        .maxFontSize(17)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Normal)
+        .fontColor('#050608')
+        .maxLines(1)
+    }
+    .layoutWeight(descriptor.weight)
+    .height(ILLUSTRATION_KEY_HEIGHT)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor(descriptor.gray ? '#C2C6CE' : '#FFFFFF')
+    .border({ width: 1, color: descriptor.gray ? '#B8BDC7' : '#F8F9FB' })
+    .borderRadius(ILLUSTRATION_KEY_RADIUS)
+    .shadow(this.resolveIllustrationKeyShadow(descriptor.gray))
+  }
+
+  @Builder
+  private renderIllustrationIconKey(kind: string, weight: number) {
+    Column() {
+      this.renderIllustrationIcon(kind, 27, 22, 1)
+    }
+    .layoutWeight(weight)
+    .height(ILLUSTRATION_KEY_HEIGHT)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#C2C6CE')
+    .border({ width: 1, color: '#B8BDC7' })
+    .borderRadius(ILLUSTRATION_KEY_RADIUS)
+    .shadow(this.resolveIllustrationKeyShadow(true))
+  }
+
+  @Builder
+  private renderIllustrationActionKey(label: string, weight: number) {
+    Column() {
+      Text(label)
+        .fontSize(label === '中/英' ? 13 : 15)
+        .minFontSize(10)
+        .maxFontSize(label === '中/英' ? 13 : 15)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#08090C')
+        .maxLines(1)
+    }
+    .layoutWeight(weight)
+    .height(ILLUSTRATION_KEY_HEIGHT)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#C2C6CE')
+    .border({ width: 1, color: '#B8BDC7' })
+    .borderRadius(ILLUSTRATION_KEY_RADIUS)
+    .shadow(this.resolveIllustrationKeyShadow(true))
+  }
+
+  @Builder
+  private renderIllustrationPunctuationKey(label: string, hint: string, weight: number) {
+    Column({ space: 0 }) {
+      Text(hint)
+        .fontSize(8)
+        .fontColor('#8F9299')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+
+      Text(label)
+        .fontSize(17)
+        .minFontSize(12)
+        .maxFontSize(17)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#050608')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    }
+    .layoutWeight(weight)
+    .height(ILLUSTRATION_KEY_HEIGHT)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(ILLUSTRATION_KEY_RADIUS)
+    .shadow(this.resolveIllustrationKeyShadow(false))
+  }
+
+  @Builder
+  private renderIllustrationSpaceKey(weight: number) {
+    Column({ space: 4 }) {
+      this.renderIllustrationIcon('mic', 20, 18, 0.76)
+
+      Row() {
+        Column()
+          .width(3)
+          .height(8)
+          .backgroundColor('#111214')
+
+        Column()
+          .width(38)
+          .height(3)
+          .backgroundColor('#111214')
+
+        Column()
+          .width(3)
+          .height(8)
+          .backgroundColor('#111214')
+      }
+      .height(10)
+      .alignItems(VerticalAlign.Bottom)
+    }
+    .layoutWeight(weight)
+    .height(ILLUSTRATION_KEY_HEIGHT)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(ILLUSTRATION_KEY_RADIUS)
+    .shadow(this.resolveIllustrationKeyShadow(false))
+  }
+
+  @Builder
+  private renderIllustrationIcon(kind: string, width: number, height: number, opacity: number) {
+    if (kind === 'gear') {
+      Image($r('app.media.ime_icon_settings_gear'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'mic') {
+      Image($r('app.media.ime_icon_feature_mic'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'chevron') {
+      Image($r('app.media.ime_icon_feature_chevron_down'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else if (kind === 'shift') {
+      Image($r('app.media.ime_icon_key_shift'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    } else {
+      Image($r('app.media.ime_icon_key_backspace'))
+        .width(width)
+        .height(height)
+        .objectFit(ImageFit.Contain)
+        .opacity(opacity)
+    }
+  }
+
+  private resolveIllustrationKeyShadow(gray: boolean): ShadowOptions {
+    return {
+      radius: 1.3,
+      color: gray ? '#2C000000' : '#36000000',
+      offsetX: 0,
+      offsetY: 2
+    };
+  }
+
+  @Builder
+  private renderImeSettingsSection() {
+    Column({ space: 16 }) {
+      Text($r('app.string.settings_enable_ime_title'))
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(TEXT_PRIMARY)
+        .width('100%')
+        .textAlign(TextAlign.Start)
+        .padding({ top: 20 })
+
+      Row({ space: 12 }) {
+        Text($r('app.string.settings_enable_ime_hint'))
+          .fontSize(14)
+          .fontColor(TEXT_SECONDARY)
+          .layoutWeight(1)
+
+        Button($r('app.string.settings_go_to_settings'))
+          .height(36)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(PRIMARY_BLUE)
+          .backgroundColor('#EBF0FF')
+          .borderRadius(14)
+          .padding({ left: 14, right: 14 })
+          .onClick((): void => {
+            void this.openImeSystemSettings();
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .padding({ bottom: 20 })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  private async openImeSystemSettings(): Promise<void> {
+    let context = this.resolveHostContext();
+    if (!context) {
+      return;
+    }
+    // 不同 HarmonyOS 版本的设置子页 URI 不一致，传入未知 URI 会落到空白页。
+    // 这里直接打开“设置”首页，由用户手动进入 系统 → 输入法 → 管理输入法 启用本输入法。
+    let want: Want = {
+      bundleName: 'com.huawei.hmos.settings',
+      abilityName: 'com.huawei.hmos.settings.MainAbility'
+    };
+    try {
+      await context.startAbility(want);
+    } catch (error) {
+      hilog.warn(PERMISSION_LOG_DOMAIN, PERMISSION_LOG_TAG,
+        'open settings home failed: %{public}s', JSON.stringify(error));
+    }
   }
 
   @Builder
   private renderPermissionSection() {
     Column({ space: 16 }) {
-      Text('麦克风')
+      Text($r('app.string.settings_microphone_title'))
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
         .fontColor(TEXT_PRIMARY)
@@ -242,7 +480,7 @@ struct Index {
 
         if (this.shouldShowMicrophonePermissionButton()) {
           Blank()
-          this.renderActionButton('授权', (): void => {
+          this.renderActionButton($r('app.string.settings_authorize'), (): void => {
             void this.requestMicrophonePermission();
           })
         }
@@ -276,7 +514,7 @@ struct Index {
   }
 
   @Builder
-  private renderActionButton(label: string, action: () => void) {
+  private renderActionButton(label: ResourceStr, action: () => void) {
     Button(label)
       .height(36)
       .fontSize(13)
@@ -307,17 +545,17 @@ struct Index {
     })
   }
 
-  private resolvePermissionLabel(): string {
+  private resolvePermissionLabel(): ResourceStr {
     if (this.microphonePermissionGranted) {
-      return '已授权';
+      return $r('app.string.permission_granted');
     }
     if (this.microphonePermissionStatus === '请求中' || this.microphonePermissionStatus === '检查中') {
-      return '检查中';
+      return $r('app.string.permission_checking');
     }
     if (this.microphonePermissionStatus === '请求失败') {
-      return '请求失败';
+      return $r('app.string.permission_request_failed');
     }
-    return '未授权';
+    return $r('app.string.permission_not_granted');
   }
 
   private resolvePermissionColor(): string {

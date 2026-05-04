@@ -1,4 +1,5 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import display from '@ohos.display';
 import pasteboard from '@ohos.pasteboard';
 import {
   BuiltinModelPreset,
@@ -13,6 +14,7 @@ import { imeRuntime } from '../runtime/ImeRuntime';
 import { KeyboardUiState, keyboardStateStore } from '../session/KeyboardStateStore';
 import { listBuiltinModelProviders, resolveBuiltinModelSelection } from '../config/BuiltinModels';
 import { LlmSelectionSnapshot } from '../session/SessionManager';
+import { formatDirectPinyinRawInput } from '../session/DirectPinyinInput';
 
 const PANEL_DOMAIN: number = 0xFF10;
 const PANEL_TAG: string = 'KeyboardPanel';
@@ -22,25 +24,77 @@ const LETTER_ROW_MIDDLE: string[] = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'
 const LETTER_ROW_BOTTOM: string[] = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
 const SIDE_PUNCTUATIONS: string[] = ['，', '。', '？', '！'];
 const COMMON_SYMBOLS: string[] = ['，', '。', '？', '！', '@', '#', '/', '-', '_', ':', ';', '(', ')'];
-const SYMBOL_CATEGORY_KEYS: string[] = ['{', '}', '《', '》'];
+const SYMBOL_CATEGORY_KEYS: string[] = ['?', '-', '%', '{', '}', '《', '》'];
 // Keep the tool bar at the original fixed height; preedit/candidates are
 // rendered as a temporary floating layer above it so keyboard height stays
 // stable while typing.
 const FEATURE_ROW_HEIGHT: number = 40;
 const TOP_ACCESSORY_HEIGHT: number = FEATURE_ROW_HEIGHT;
 const PANEL_TOP_PADDING: number = 4;
+const PANEL_BOTTOM_SAFE_GAP: number = 5;
 const CANDIDATE_TOOLBAR_OVERLAY_HEIGHT: number = FEATURE_ROW_HEIGHT;
+// Expanded candidate board proportions are based on the 1080px reference
+// image, but applied as layout weights so the board scales with the actual
+// keyboard width instead of using screenshot pixels as vp values.
+const EXPANDED_CANDIDATE_SIDE_WEIGHT: number = 178;
+const EXPANDED_CANDIDATE_GRID_WEIGHT: number = 638;
+const EXPANDED_CANDIDATE_ACTION_WEIGHT: number = 178;
+const EXPANDED_CANDIDATE_GAP: number = 6;
+const EXPANDED_CANDIDATE_ACTION_ARROW_WEIGHT: number = 2.12;
+const EXPANDED_CANDIDATE_TOP_PADDING: number = 3;
+const EXPANDED_CANDIDATE_BOTTOM_PADDING: number = PANEL_BOTTOM_SAFE_GAP;
+const EXPANDED_CANDIDATE_TEXT_PADDING: number = 4;
+const EXPANDED_CANDIDATE_FONT_SIZE: number = 24;
+const EXPANDED_PINYIN_FONT_SIZE: number = 20;
+const EXPANDED_ACTION_FONT_SIZE: number = 20;
+const EXPANDED_ACTION_SECONDARY_FONT_SIZE: number = 14;
+const EXPANDED_ARROW_FONT_SIZE: number = 38;
+const EXPANDED_ARROW_TEXT_HEIGHT: number = 42;
+const EXPANDED_CANDIDATE_ROWS: number[] = [0, 1, 2, 3, 4, 5];
+const EXPANDED_CANDIDATE_COLUMNS: number[] = [0, 1, 2, 3];
+const EXPANDED_PINYIN_ROWS: number[] = [0, 1, 2, 3, 4, 5];
 // iOS-style T9 keys: tighter corner radius gives a flatter, more grid-aligned
 // look than the previous 18 which made keys feel floaty and slightly
 // misaligned with neighbors.
 const T9_KEY_RADIUS: number = 8;
+const QWERTY_KEY_RADIUS: number = 8;
+const QWERTY_KEY_GAP: number = 5;
+const QWERTY_REFERENCE_CONTENT_WIDTH: number = 344;
+const QWERTY_REFERENCE_HEIGHT: number = 226;
+const QWERTY_REFERENCE_ROW_HEIGHT: number = 46;
+const QWERTY_REFERENCE_ROW_GAP: number = 14;
+const QWERTY_REFERENCE_HORIZONTAL_PADDING: number = 16;
+const QWERTY_MIN_CONTENT_WIDTH: number = 280;
+const QWERTY_BOTTOM_SIDE_WEIGHT: number = 1.64;
+const QWERTY_BOTTOM_QUICK_WEIGHT: number = 1.2;
+const QWERTY_BOTTOM_PUNCTUATION_WEIGHT: number = 1;
+const QWERTY_BOTTOM_SPACE_WEIGHT: number = 2.95;
+const QWERTY_WHITE_KEY_COLOR: string = '#FFFFFF';
+const QWERTY_GRAY_KEY_COLOR: string = '#C2C6CE';
+const QWERTY_GRAY_KEY_BORDER_COLOR: string = '#B8BDC7';
+const QWERTY_ACTIVE_KEY_COLOR: string = '#D9E3D0';
+const QWERTY_ACTIVE_KEY_BORDER_COLOR: string = '#D0D9C8';
+const NUMBER_KEYBOARD_REFERENCE_CONTENT_WIDTH: number = 344;
+const NUMBER_KEYBOARD_REFERENCE_ROW_HEIGHT: number = 52;
+const NUMBER_KEYBOARD_REFERENCE_GAP: number = 6;
+const NUMBER_KEYBOARD_SIDE_WEIGHT: number = 58;
+const NUMBER_KEYBOARD_DIGIT_GROUP_WEIGHT: number = 216;
+const NUMBER_KEYBOARD_DIGIT_FONT_SIZE: number = 22;
+const NUMBER_KEYBOARD_ACTION_FONT_SIZE: number = 18;
+const NUMBER_KEYBOARD_OPERATOR_FONT_SIZE: number = 20;
+const NUMBER_OPERATOR_KEYS: string[] = ['+', '-', '=', '/'];
+const NUMBER_DIGIT_ROWS: string[][] = [
+  ['1', '2', '3'],
+  ['4', '5', '6'],
+  ['7', '8', '9']
+];
 
 interface NineGridKeyDescriptor {
   digit: string;
   label: string;
   action: 'digit' | 'text';
   value: string;
-}
+  }
 
 interface QwertyKeyDescriptor {
   hint: string;
@@ -49,6 +103,7 @@ interface QwertyKeyDescriptor {
 }
 
 type SymbolKeyRole = 'text' | 'more' | 'backspace' | 'return' | 'space' | 'enter';
+type SymbolKeyboardVariant = 'symbol' | 'number';
 
 interface SymbolKeyDescriptor {
   label: string;
@@ -131,20 +186,20 @@ const SYMBOL_PRIMARY_ROW_2: SymbolKeyDescriptor[] = [
   { label: ';', output: ';', role: 'text', weight: 1, gray: false },
   { label: '(', output: '(', role: 'text', weight: 1, gray: false },
   { label: ')', output: ')', role: 'text', weight: 1, gray: false },
-  { label: '—', output: '—', role: 'text', weight: 1, gray: false },
-  { label: '“', output: '“', role: 'text', weight: 1, gray: false },
-  { label: '”', output: '”', role: 'text', weight: 1, gray: false }
+  { label: '_', output: '_', role: 'text', weight: 1, gray: false },
+  { label: '$', output: '$', role: 'text', weight: 1, gray: false },
+  { label: '&', output: '&', role: 'text', weight: 1, gray: false }
 ];
 
 const SYMBOL_PRIMARY_ROW_3: SymbolKeyDescriptor[] = [
   { label: '更多', output: '', role: 'more', weight: 1.35, gray: true },
-  { label: '@', output: '@', role: 'text', weight: 1, gray: false },
-  { label: '…', output: '…', role: 'text', weight: 1, gray: false },
+  { label: '"', output: '"', role: 'text', weight: 1, gray: false },
   { label: '~', output: '~', role: 'text', weight: 1, gray: false },
-  { label: '、', output: '、', role: 'text', weight: 1, gray: false },
+  { label: '...', output: '…', role: 'text', weight: 1, gray: false },
+  { label: '@', output: '@', role: 'text', weight: 1, gray: false },
   { label: '?', output: '?', role: 'text', weight: 1, gray: false },
   { label: '!', output: '!', role: 'text', weight: 1, gray: false },
-  { label: '.', output: '.', role: 'text', weight: 1, gray: false },
+  { label: '\'', output: '\'', role: 'text', weight: 1, gray: false },
   { label: '⌫', output: '', role: 'backspace', weight: 1.35, gray: true }
 ];
 
@@ -180,7 +235,12 @@ struct KeyboardPanel {
   @State private activeSettingsTab: string = 'input';
   @State private showSymbolPalette: boolean = false;
   @State private showSymbolKeyboard: boolean = false;
+  @State private symbolKeyboardVariant: SymbolKeyboardVariant = 'symbol';
   @State private symbolKeyboardMorePage: boolean = false;
+  @State private showExpandedCandidateBoard: boolean = false;
+  @State private expandedCandidateSingleMode: boolean = false;
+  @State private expandedCandidatePageNo: number = 0;
+  @State private expandedCandidateCanPageBackward: boolean = false;
   // Pulse ring state for the voice waiting circle. `voicePulseExpanded`
   // toggles every PULSE_INTERVAL_MS so the outer rings animate out/in
   // continuously while we are waiting for the user to keep speaking.
@@ -193,7 +253,6 @@ struct KeyboardPanel {
   // Toggles masking on the API Key input; matches the eye icon in the mockup.
   @State private llmApiKeyRevealed: boolean = false;
   @State private llmSaveStatus: string = '';
-  @State private runtimeEnableVoice: boolean = true;
   @State private runtimeEnableBuiltinAsr: boolean = true;
   @State private runtimeEnableCloudPolish: boolean = true;
   @State private runtimeAutoPolishVoiceResult: boolean = true;
@@ -222,7 +281,9 @@ struct KeyboardPanel {
 
   aboutToAppear(): void {
     this.unsubscribe = keyboardStateStore.subscribe((state: KeyboardUiState): void => {
+      let previousExpandedCandidateInput = this.resolveExpandedCandidateInputSignature(this.uiState);
       this.uiState = state;
+      this.syncExpandedCandidatePageState(state, previousExpandedCandidateInput);
       if (state.keyboardLayout !== 'voice_panel') {
         this.lastNonVoiceSubtypeId = state.currentSubtypeId;
         this.lastNonVoiceKeyboardLayout = state.keyboardLayout;
@@ -240,12 +301,19 @@ struct KeyboardPanel {
           this.showSymbolPalette = false;
           this.showSymbolKeyboard = false;
           this.symbolKeyboardMorePage = false;
+          this.showExpandedCandidateBoard = false;
           this.activeSettingsTab = 'input';
         }
       }
       if (state.keyboardLayout === 'voice_panel') {
         this.showSymbolKeyboard = false;
         this.symbolKeyboardMorePage = false;
+        this.showExpandedCandidateBoard = false;
+      }
+      if (!this.canShowExpandedCandidateBoard(state)) {
+        this.showExpandedCandidateBoard = false;
+        this.expandedCandidatePageNo = 0;
+        this.expandedCandidateCanPageBackward = false;
       }
       this.syncVoicePulseAnimation(state);
     });
@@ -305,31 +373,35 @@ struct KeyboardPanel {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (!this.showSettingsTray) {
-        Column({ space: 0 }) {
-          this.renderTopAccessoryArea()
+        if (this.showExpandedCandidateBoard && this.canShowExpandedCandidateBoard(this.uiState)) {
+          this.renderExpandedCandidateKeyboard()
+        } else {
+          Column({ space: 0 }) {
+            this.renderTopAccessoryArea()
 
-          if (this.showSymbolKeyboard) {
-            this.renderReferenceSymbolKeyboard();
-          } else {
-            this.renderVoiceDraftCard()
-            this.renderPolishSuggestionStrip()
-
-            if (this.uiState.keyboardLayout === 'voice_panel') {
-              this.renderVoicePanel();
-            } else if (this.uiState.keyboardLayout === 't9_9') {
-              this.renderReferenceNineKeyKeyboard();
+            if (this.showSymbolKeyboard) {
+              this.renderReferenceSymbolKeyboard();
             } else {
-              this.renderReferenceQwertyKeyboard();
+              this.renderVoiceDraftCard()
+              this.renderPolishSuggestionStrip()
+
+              if (this.uiState.keyboardLayout === 'voice_panel') {
+                this.renderVoicePanel();
+              } else if (this.uiState.keyboardLayout === 't9_9') {
+                this.renderReferenceNineKeyKeyboard();
+              } else {
+                this.renderReferenceQwertyKeyboard();
+              }
             }
           }
-        }
-        .width('100%')
-        .height('100%')
-        .padding({ left: 8, right: 8, top: PANEL_TOP_PADDING, bottom: 0 })
-        .backgroundColor('#D9DCE2')
+          .width('100%')
+          .height('100%')
+          .padding({ left: 8, right: 8, top: PANEL_TOP_PADDING, bottom: PANEL_BOTTOM_SAFE_GAP })
+          .backgroundColor('#D9DCE2')
 
-        if (!this.showSymbolKeyboard && this.shouldShowCandidateStrip()) {
-          this.renderCandidateToolbarOverlay()
+          if (!this.showSymbolKeyboard && this.shouldShowCandidateStrip()) {
+            this.renderCandidateToolbarOverlay()
+          }
         }
       } else {
         Column({ space: 0 }) {
@@ -337,7 +409,7 @@ struct KeyboardPanel {
         }
         .width('100%')
         .height('100%')
-        .padding({ left: 8, right: 8, top: PANEL_TOP_PADDING, bottom: 0 })
+        .padding({ left: 8, right: 8, top: PANEL_TOP_PADDING, bottom: PANEL_BOTTOM_SAFE_GAP })
         .backgroundColor('#D9DCE2')
         .zIndex(10)
       }
@@ -350,7 +422,7 @@ struct KeyboardPanel {
   @Builder
   private renderTopAccessoryArea() {
     Column() {
-      if (this.showSymbolKeyboard) {
+      if (this.showSymbolKeyboard && this.symbolKeyboardVariant === 'symbol') {
         this.renderSymbolKeyboardHeader()
       } else {
         this.renderFeatureRow()
@@ -370,6 +442,7 @@ struct KeyboardPanel {
 
       this.renderHeaderOutlineButton('☺', (): void => {
         this.showSymbolPalette = !this.showSymbolPalette;
+        this.showExpandedCandidateBoard = false;
       })
 
       this.renderComposeCapsule()
@@ -397,6 +470,7 @@ struct KeyboardPanel {
 
       this.renderReferenceQwertyHeaderButton('☺︎', (): void => {
         this.showSymbolPalette = !this.showSymbolPalette;
+        this.showExpandedCandidateBoard = false;
       })
 
       this.renderReferenceQwertyHeaderButton('+', (): void => {
@@ -507,66 +581,112 @@ struct KeyboardPanel {
       Blank()
         .height(8)
 
-      if (this.activeSettingsTab === 'llm') {
+      if (this.activeSettingsTab === 'voicePolish') {
         this.renderLlmSettingsGrid()
       } else {
-        Scroll() {
-          Column({ space: 12 }) {
+        List({ space: 12 }) {
+          ListItem() {
             if (this.activeSettingsTab === 'input') {
               this.renderInputSettingsGrid()
             } else {
               this.renderCommonSettingsGrid()
             }
-
-            Blank()
-              .height(8)
           }
-          .width('100%')
         }
         .width('100%')
         .layoutWeight(1)
+        .padding({ left: 0, right: 0, top: 0, bottom: 8 })
         .scrollBar(BarState.Auto)
         .edgeEffect(EdgeEffect.Spring)
       }
     }
     .width('100%')
     .layoutWeight(1)
-    .justifyContent(FlexAlign.SpaceBetween)
+    .justifyContent(FlexAlign.Start)
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   @Builder
   private renderSettingsHeader() {
-    Row({ space: 8 }) {
-      Button() {
-        this.renderSettingsIconAsset('collapse', 24, 24)
-      }
-        .width(42)
-        .height(42)
-        .backgroundColor('#D4D7DC')
-        .borderRadius(21)
-        .shadow(this.resolveGrayKeyShadow())
-        .onClick(() => {
-          this.closeSettingsOverlay();
-        })
+    if (this.activeSettingsTab === 'voicePolish') {
+      this.renderVoicePolishSettingsHeader()
+    } else {
+      Row({ space: 8 }) {
+        Button() {
+          this.renderSettingsIconAsset('collapse', 24, 24)
+        }
+          .width(42)
+          .height(42)
+          .backgroundColor('#D4D7DC')
+          .borderRadius(21)
+          .shadow(this.resolveGrayKeyShadow())
+          .onClick(() => {
+            this.closeSettingsOverlay();
+          })
 
-      Row({ space: 4 }) {
-        this.renderSettingsTabButton('input', '输入')
-        this.renderSettingsTabButton('common', '配置')
-        this.renderSettingsTabButton('llm', '模型')
+        Row({ space: 4 }) {
+          this.renderSettingsTabButton('input', $r('app.string.ime_settings_tab_input'))
+          this.renderSettingsTabButton('common', $r('app.string.ime_settings_tab_common'))
+        }
+        .layoutWeight(1)
+        .height(48)
+        .padding({ left: 3, right: 3, top: 3, bottom: 3 })
+        .backgroundColor('#D4D7DC')
+        .borderRadius(24)
       }
-      .layoutWeight(1)
-      .height(48)
-      .padding({ left: 3, right: 3, top: 3, bottom: 3 })
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+    }
+  }
+
+  @Builder
+  private renderVoicePolishSettingsHeader() {
+    Row({ space: 10 }) {
+      Button() {
+        Text('‹')
+          .fontSize(28)
+          .fontColor('#30333A')
+          .fontWeight(FontWeight.Medium)
+          .height('100%')
+          .textAlign(TextAlign.Center)
+      }
+      .width(42)
+      .height(42)
       .backgroundColor('#D4D7DC')
-      .borderRadius(24)
+      .borderRadius(21)
+      .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+      .shadow(this.resolveGrayKeyShadow())
+      .onClick(() => {
+        this.returnFromVoiceAutoPolishSettings();
+      })
+
+      Text($r('app.string.ime_voice_auto_polish'))
+        .layoutWeight(1)
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#17181B')
+        .maxLines(1)
+        .textAlign(TextAlign.Start)
+
+      Button() {
+        this.renderSettingsIconAsset('collapse', 22, 22)
+      }
+      .width(42)
+      .height(42)
+      .backgroundColor('#D4D7DC')
+      .borderRadius(21)
+      .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+      .shadow(this.resolveGrayKeyShadow())
+      .onClick(() => {
+        this.closeVoiceAutoPolishSettings();
+      })
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
   }
 
   @Builder
-  private renderSettingsTabButton(tabId: string, label: string) {
+  private renderSettingsTabButton(tabId: string, label: ResourceStr) {
     Button() {
       Text(label)
         .width('100%')
@@ -587,9 +707,7 @@ struct KeyboardPanel {
       .shadow(this.resolveSettingsTabShadow(this.activeSettingsTab === tabId))
       .onClick(() => {
         this.activeSettingsTab = tabId;
-        if (tabId === 'llm') {
-          this.seedLlmDialogState();
-        } else if (tabId === 'common') {
+        if (tabId === 'common') {
           this.seedRuntimeSettingsState();
         }
       })
@@ -602,45 +720,16 @@ struct KeyboardPanel {
       // coherent settings block rather than three stacked chips.
       Column() {
         this.renderRuntimeToggleRow(
-          '语音输入',
-          this.runtimeEnableVoice,
-          (next: boolean): void => {
-            this.runtimeEnableVoice = next;
-            this.persistRuntimeSettings(next ? '已开启语音输入' : '已关闭语音输入');
-          },
-          true,
-          false
-        )
-        this.renderRuntimeToggleRow(
-          '系统内置语音识别',
+          $r('app.string.ime_builtin_asr'),
           this.runtimeEnableBuiltinAsr,
           (next: boolean): void => {
             this.runtimeEnableBuiltinAsr = next;
             this.persistRuntimeSettings(next ? '已启用系统内置语音识别' : '已关闭系统内置语音识别，使用端侧 SenseVoice');
           },
-          this.runtimeEnableVoice,
-          true
-        )
-        this.renderRuntimeToggleRow(
-          '文本润色',
-          this.runtimeEnableCloudPolish,
-          (next: boolean): void => {
-            this.runtimeEnableCloudPolish = next;
-            this.persistRuntimeSettings(next ? '已开启文本润色' : '已关闭文本润色');
-          },
           true,
-          true
+          false
         )
-        this.renderRuntimeToggleRow(
-          '语音后自动润色',
-          this.runtimeAutoPolishVoiceResult,
-          (next: boolean): void => {
-            this.runtimeAutoPolishVoiceResult = next;
-            this.persistRuntimeSettings(next ? '已开启自动润色' : '已关闭自动润色');
-          },
-          this.runtimeEnableVoice && this.runtimeEnableCloudPolish,
-          true
-        )
+        this.renderVoiceAutoPolishSettingsRow()
       }
       .width('100%')
       .backgroundColor('#FFFFFF')
@@ -661,7 +750,59 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderRuntimeToggleRow(title: string, enabled: boolean, action: (next: boolean) => void, active: boolean, showDivider: boolean) {
+  private renderVoiceAutoPolishSettingsRow() {
+    Column() {
+      Divider()
+        .strokeWidth(1)
+        .color('#F0F2F6')
+        .width('100%')
+
+      Row({ space: 12 }) {
+        Column({ space: 4 }) {
+          Text($r('app.string.ime_voice_auto_polish'))
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#17181B')
+            .width('100%')
+            .textAlign(TextAlign.Start)
+
+          Text(this.runtimeAutoPolishVoiceResult ? this.resolveSavedVoicePolishModelLabel() : $r('app.string.ime_settings_off'))
+            .fontSize(11)
+            .fontColor('#7A7D82')
+            .width('100%')
+            .textAlign(TextAlign.Start)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+
+        Button() {
+          Text('›')
+            .fontSize(23)
+            .fontColor('#7A7D82')
+            .height('100%')
+            .textAlign(TextAlign.Center)
+        }
+        .width(30)
+        .height(34)
+        .backgroundColor('rgba(0,0,0,0)')
+        .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+        .onClick(() => {
+          this.openVoiceAutoPolishSettings();
+        })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 10, top: 14, bottom: 14 })
+      .alignItems(VerticalAlign.Top)
+      .onClick(() => {
+        this.openVoiceAutoPolishSettings();
+      })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private renderRuntimeToggleRow(title: ResourceStr, enabled: boolean, action: (next: boolean) => void, active: boolean, showDivider: boolean) {
     Column() {
       if (showDivider) {
         Divider()
@@ -690,102 +831,109 @@ struct KeyboardPanel {
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 14, bottom: 14 })
-      .alignItems(VerticalAlign.Center)
+      .alignItems(VerticalAlign.Top)
     }
     .width('100%')
   }
 
   @Builder
   private renderInputSettingsGrid() {
-    Column({ space: 12 }) {
-      Row({ space: 12 }) {
-        this.renderSettingsTile('拼', '中文', (): void => {
-          this.switchSettingsSubtype('zh-Hans-pinyin');
-        }, !this.isEnglishSubtype() && this.uiState.keyboardLayout !== 'voice_panel')
-        this.renderSettingsTile('EN', 'English', (): void => {
-          this.switchSettingsSubtype('en-US-qwerty');
-        }, this.isEnglishSubtype())
-        this.renderSettingsTile('voice', '语音', (): void => {
-          if (!this.runtimeEnableVoice) {
-            this.activeSettingsTab = 'common';
-            this.runtimeSaveStatus = '先开启语音输入';
-            this.seedRuntimeSettingsState();
-            return;
-          }
-          let voiceSubtype = this.findSubtypeById('zh-CN-voice');
-          if (voiceSubtype.length > 0) {
-            void imeRuntime.getSessionManager()?.switchSubtype(voiceSubtype);
-          } else {
-            let pinyinSubtype = this.findSubtypeById('zh-Hans-pinyin');
-            if (pinyinSubtype.length > 0) {
-              void imeRuntime.getSessionManager()?.switchSubtype(pinyinSubtype);
-            }
-          }
-          void imeRuntime.getSessionManager()?.switchKeyboardLayout('voice_panel');
-          this.closeSettingsOverlay();
-        }, this.uiState.keyboardLayout === 'voice_panel')
-      }
-      .width('100%')
+    Row({ space: 4 }) {
+      this.renderInputModeSegment('拼', $r('app.string.ime_input_mode_pinyin'), (): void => {
+        this.switchSettingsSubtype('zh-Hans-pinyin');
+      }, !this.isEnglishSubtype() && this.uiState.keyboardLayout !== 'voice_panel')
+      this.renderInputModeSegment('EN', $r('app.string.ime_input_mode_english'), (): void => {
+        this.switchSettingsSubtype('en-US-qwerty');
+      }, this.isEnglishSubtype())
+      this.renderInputModeSegment('voice', $r('app.string.ime_input_mode_voice'), (): void => {
+        void this.switchSettingsVoiceMode();
+      }, this.uiState.keyboardLayout === 'voice_panel')
     }
     .width('100%')
-    .padding({ left: 0, right: 0, bottom: 4 })
+    .height(52)
+    .padding({ left: 4, right: 4, top: 4, bottom: 4 })
+    .backgroundColor('#F1F3F6')
+    .border({ width: 1, color: '#EAECF1' })
+    .borderRadius(18)
   }
 
-  // LLM settings tab: a card-based layout inspired by mainstream mobile IME
-  // assistants. The provider is picked via a horizontal card row, the model
-  // via an inline dropdown, and the API Key via a masked input with
-  // eye/paste/clear affordances.
+  // Voice auto-polish subpage: the previous top-level model settings now live
+  // under the voice polish entry so model configuration only applies to voice
+  // transcripts.
   @Builder
   private renderLlmSettingsGrid() {
-    Scroll() {
-      Column({ space: 12 }) {
-        this.renderLlmCombinedCard()
+    List({ space: 12 }) {
+      ListItem() {
+        this.renderVoiceAutoPolishSwitchCard()
+      }
 
-        if (this.llmSaveStatus.length > 0) {
+      if (this.llmSaveStatus.length > 0) {
+        ListItem() {
           Text(this.llmSaveStatus)
             .fontSize(11)
             .fontColor('#3478F6')
             .width('100%')
             .padding({ left: 4 })
         }
-
-        Row({ space: 10 }) {
-          Button('重置')
-            .layoutWeight(1)
-            .height(40)
-            .fontSize(14)
-            .fontColor('#3478F6')
-            .fontWeight(FontWeight.Medium)
-            .backgroundColor('#FFFFFF')
-            .border({ width: 1, color: '#C7DBFF' })
-            .borderRadius(20)
-            .onClick(() => {
-              this.seedLlmDialogState();
-              this.llmSaveStatus = '';
-            })
-          Button('保存并启用')
-            .layoutWeight(2)
-            .height(40)
-            .fontSize(14)
-            .fontColor('#FFFFFF')
-            .fontWeight(FontWeight.Medium)
-            .backgroundColor('#3478F6')
-            .borderRadius(20)
-            .onClick(() => {
-              this.saveLlmDialog();
-            })
-        }
-        .width('100%')
-        .padding({ top: 4, bottom: 4 })
       }
-      .width('100%')
-      .padding({ left: 4, right: 4, top: 4, bottom: 8 })
-      .alignItems(HorizontalAlign.Start)
+
+      if (this.runtimeAutoPolishVoiceResult) {
+        ListItem() {
+          this.renderLlmCombinedCard()
+        }
+      }
     }
     .width('100%')
     .layoutWeight(1)
+    .padding({ left: 4, right: 4, top: 4, bottom: 8 })
     .scrollBar(BarState.Auto)
     .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  private renderVoiceAutoPolishSwitchCard() {
+    Column() {
+      Row({ space: 12 }) {
+        Column({ space: 4 }) {
+          Text($r('app.string.ime_voice_auto_polish_enable'))
+            .fontSize(14)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#17181B')
+            .width('100%')
+            .textAlign(TextAlign.Start)
+
+          Text(this.runtimeAutoPolishVoiceResult ?
+            $r('app.string.ime_voice_auto_polish_on_hint') :
+            $r('app.string.ime_voice_auto_polish_off_hint'))
+            .fontSize(11)
+            .fontColor('#7A7D82')
+            .width('100%')
+            .textAlign(TextAlign.Start)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+
+        Toggle({ type: ToggleType.Switch, isOn: this.runtimeAutoPolishVoiceResult })
+          .selectedColor('#3478F6')
+          .switchPointColor('#FFFFFF')
+          .onChange((isOn: boolean) => {
+            if (isOn === this.runtimeAutoPolishVoiceResult) {
+              return;
+            }
+            this.runtimeEnableCloudPolish = isOn;
+            this.runtimeAutoPolishVoiceResult = isOn;
+            this.llmSaveStatus = '';
+          })
+      }
+      .width('100%')
+      .padding({ left: 12, right: 12, top: 14, bottom: 14 })
+      .alignItems(VerticalAlign.Top)
+    }
+    .width('100%')
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
   }
 
   // All three LLM selectors (provider / model / API key) live in a single
@@ -817,7 +965,7 @@ struct KeyboardPanel {
   @Builder
   private renderLlmProviderRow() {
     Column({ space: 10 }) {
-      Text('模型提供商')
+      Text($r('app.string.ime_model_provider'))
         .fontSize(13)
         .fontColor('#17181B')
         .fontWeight(FontWeight.Medium)
@@ -863,7 +1011,7 @@ struct KeyboardPanel {
   @Builder
   private renderLlmModelRow() {
     Column({ space: 10 }) {
-      Text('当前模型')
+      Text($r('app.string.ime_current_model'))
         .fontSize(13)
         .fontColor('#17181B')
         .fontWeight(FontWeight.Medium)
@@ -930,7 +1078,7 @@ struct KeyboardPanel {
     }
     if (items.length === 0) {
       items.push({
-        value: '（该供应商暂无可用模型）',
+        value: $r('app.string.ime_no_model_available'),
         action: (): void => {
         }
       });
@@ -959,7 +1107,7 @@ struct KeyboardPanel {
 
       Row({ space: 8 }) {
         Row({ space: 6 }) {
-          TextInput({ placeholder: '粘贴 API Key', text: this.llmDialogApiKey })
+          TextInput({ placeholder: $r('app.string.ime_api_key_placeholder'), text: this.llmDialogApiKey })
             .type(this.llmApiKeyRevealed ? InputType.Normal : InputType.Password)
             .fontSize(13)
             .height(36)
@@ -990,7 +1138,7 @@ struct KeyboardPanel {
         .borderRadius(10)
         .border({ width: 1, color: '#E4E6EA' })
 
-        Button('粘贴')
+        Button($r('app.string.ime_action_paste'))
           .height(40)
           .fontSize(13)
           .fontColor('#17181B')
@@ -1001,7 +1149,7 @@ struct KeyboardPanel {
           .onClick(() => {
             this.pasteLlmApiKeyFromClipboard();
           })
-        Button('清空')
+        Button($r('app.string.ime_action_clear'))
           .height(40)
           .fontSize(13)
           .fontColor('#3478F6')
@@ -1039,6 +1187,16 @@ struct KeyboardPanel {
       return provider.providerName;
     }
     return '未选择';
+  }
+
+  private resolveSavedVoicePolishModelLabel(): string {
+    let session = imeRuntime.getSessionManager();
+    if (!session) {
+      return this.resolveCurrentModelLabel();
+    }
+    let snap: LlmSelectionSnapshot = session.getLlmSelectionSnapshot();
+    let resolved = resolveBuiltinModelSelection(snap.providerId, snap.presetId);
+    return `${resolved.provider.providerName} ${resolved.preset.displayName}`;
   }
 
   private resolveProviderInitial(providerName: string): string {
@@ -1099,10 +1257,10 @@ struct KeyboardPanel {
       return;
     }
     let runtime: OffhandRuntimeSettings = session.getRuntimeSettingsSnapshot();
-    this.runtimeEnableVoice = runtime.enableVoice;
     this.runtimeEnableBuiltinAsr = runtime.enableBuiltinAsr;
-    this.runtimeEnableCloudPolish = runtime.enableCloudPolish;
-    this.runtimeAutoPolishVoiceResult = runtime.autoPolishVoiceResult;
+    let autoVoicePolishEnabled = runtime.enableCloudPolish && runtime.autoPolishVoiceResult;
+    this.runtimeEnableCloudPolish = autoVoicePolishEnabled;
+    this.runtimeAutoPolishVoiceResult = autoVoicePolishEnabled;
     this.runtimeSaveStatus = '';
   }
 
@@ -1122,6 +1280,63 @@ struct KeyboardPanel {
     this.llmApiKeyRevealed = false;
   }
 
+  private openVoiceAutoPolishSettings(): void {
+    this.seedRuntimeSettingsState();
+    this.seedLlmDialogState();
+    this.llmSaveStatus = '';
+    this.activeSettingsTab = 'voicePolish';
+  }
+
+  private returnFromVoiceAutoPolishSettings(): void {
+    this.activeSettingsTab = 'common';
+    void this.saveVoiceAutoPolishSettings('已保存语音后自动润色配置')
+      .then((saved: boolean): void => {
+        this.seedRuntimeSettingsState();
+        if (saved) {
+          this.runtimeSaveStatus = '已保存语音后自动润色配置';
+        }
+      });
+  }
+
+  private closeVoiceAutoPolishSettings(): void {
+    void this.saveVoiceAutoPolishSettings('')
+      .finally((): void => {
+        this.closeSettingsOverlay();
+      });
+  }
+
+  private async saveVoiceAutoPolishSettings(successText: string): Promise<boolean> {
+    let session = imeRuntime.getSessionManager();
+    if (!session) {
+      this.llmSaveStatus = '保存失败：会话未就绪';
+      this.runtimeSaveStatus = this.llmSaveStatus;
+      return false;
+    }
+
+    try {
+      this.runtimeEnableCloudPolish = this.runtimeAutoPolishVoiceResult;
+      let runtime: OffhandRuntimeSettings = session.getRuntimeSettingsSnapshot();
+      runtime.enableVoice = true;
+      runtime.enableBuiltinAsr = this.runtimeEnableBuiltinAsr;
+      runtime.enableCloudPolish = this.runtimeAutoPolishVoiceResult;
+      runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
+      await session.updateRuntimeSettings(runtime, 'keyboardVoicePolishSettings');
+
+      if (this.runtimeAutoPolishVoiceResult) {
+        await session.updateLlmSelection(this.llmDialogProviderId, this.llmDialogPresetId, this.llmDialogApiKey);
+      }
+
+      if (successText.length > 0) {
+        this.llmSaveStatus = successText;
+      }
+      return true;
+    } catch (error) {
+      this.llmSaveStatus = '保存失败：' + ((error as Error).message ?? String(error));
+      this.runtimeSaveStatus = this.llmSaveStatus;
+      return false;
+    }
+  }
+
   private persistRuntimeSettings(successText: string): void {
     let session = imeRuntime.getSessionManager();
     if (!session) {
@@ -1129,9 +1344,10 @@ struct KeyboardPanel {
       return;
     }
     let runtime: OffhandRuntimeSettings = session.getRuntimeSettingsSnapshot();
-    runtime.enableVoice = this.runtimeEnableVoice;
+    this.runtimeEnableCloudPolish = this.runtimeAutoPolishVoiceResult;
+    runtime.enableVoice = true;
     runtime.enableBuiltinAsr = this.runtimeEnableBuiltinAsr;
-    runtime.enableCloudPolish = this.runtimeEnableCloudPolish;
+    runtime.enableCloudPolish = this.runtimeAutoPolishVoiceResult;
     runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
     this.runtimeSaveStatus = '保存中…';
     session.updateRuntimeSettings(runtime, 'keyboardSettings')
@@ -1164,36 +1380,55 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderSettingsTile(icon: string, title: string, action: () => void, selected: boolean = false) {
+  private renderInputModeSegment(icon: string, title: ResourceStr, action: () => void, selected: boolean = false) {
     Button() {
-      Column({ space: 8 }) {
-        this.renderSettingsIconAsset(icon, 31, 31)
+      Row({ space: 6 }) {
+        this.renderInputModeSegmentIcon(icon, selected)
 
         Text(title)
-          .fontSize(13)
-          .minFontSize(10)
-          .maxFontSize(13)
+          .fontSize(14)
+          .minFontSize(11)
+          .maxFontSize(14)
           .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#4D5058')
+          .fontWeight(selected ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor(selected ? '#17181B' : '#60646C')
           .textAlign(TextAlign.Center)
           .maxLines(1)
       }
       .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
+      .alignItems(VerticalAlign.Center)
       .width('100%')
       .height('100%')
-      .padding({ left: 6, right: 6, top: 4, bottom: 4 })
+      .padding({ left: 4, right: 4, top: 0, bottom: 0 })
     }
     .layoutWeight(1)
-    .height(84)
-    .backgroundColor(selected ? '#EDF3FF' : '#FFFFFF')
-    .border({ width: 1, color: selected ? '#D5E4FF' : '#F5F6F8' })
-    .borderRadius(20)
-    .shadow(this.resolveWhiteKeyShadow())
+    .height(44)
+    .backgroundColor(selected ? '#FFFFFF' : 'rgba(0,0,0,0)')
+    .border({ width: selected ? 1 : 0, color: selected ? '#FFFFFF' : 'rgba(0,0,0,0)' })
+    .borderRadius(14)
+    .shadow({
+      radius: selected ? 1.2 : 0,
+      color: selected ? '#30000000' : '#00000000',
+      offsetX: 0,
+      offsetY: selected ? 2 : 0
+    })
     .onClick(() => {
       action();
     })
+  }
+
+  @Builder
+  private renderInputModeSegmentIcon(icon: string, selected: boolean = false) {
+    if (icon === 'voice') {
+      this.renderSettingsIconAsset(icon, 18, 18, selected ? 0.92 : 0.62)
+    } else {
+      Text(icon)
+        .fontSize(icon.length > 1 ? 12 : 16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(selected ? '#17181B' : '#676B73')
+        .height(20)
+        .textAlign(TextAlign.Center)
+    }
   }
 
   @Builder
@@ -1235,18 +1470,19 @@ struct KeyboardPanel {
         .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
       } else {
         Row({ space: 10 }) {
-          if (this.resolveCandidatePreeditText().length > 0) {
-            Text(this.resolveCandidatePreeditText())
-              .fontSize(15)
-              .fontWeight(FontWeight.Normal)
+          if (this.resolveInlinePinyinText().length > 0) {
+            Text(this.resolveInlinePinyinText())
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
               .fontColor('#111214')
+              .width(112)
               .height(34)
-              .padding({ left: 12, right: 12 })
+              .padding({ left: 10, right: 10 })
+              .textAlign(TextAlign.Center)
               .backgroundColor('#FFFFFF')
               .border({ width: 1, color: '#F6F7F9' })
               .borderRadius(9)
               .maxLines(1)
-              .constraintSize({ maxWidth: 108 })
               .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
 
@@ -1287,13 +1523,16 @@ struct KeyboardPanel {
           Text('›')
             .fontSize(28)
             .fontWeight(FontWeight.Normal)
-            .fontColor(this.uiState.hasNextCandidatePage ? '#5F636C' : '#8C9098')
+            .fontColor(this.canShowExpandedCandidateBoard(this.uiState) ? '#5F636C' : '#8C9098')
             .width(28)
             .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
             .textAlign(TextAlign.Center)
             .onClick(() => {
-              if (this.uiState.hasNextCandidatePage) {
-                void imeRuntime.getSessionManager()?.pageCandidateForward();
+              if (this.canShowExpandedCandidateBoard(this.uiState)) {
+                this.expandedCandidatePageNo = Math.max(0, this.uiState.candidatePageNo);
+                this.expandedCandidateCanPageBackward = this.canPageExpandedCandidateBackward();
+                this.showExpandedCandidateBoard = true;
+                this.showSymbolPalette = false;
               }
             })
         }
@@ -1316,14 +1555,14 @@ struct KeyboardPanel {
     if (this.uiState.voiceDraftText.length > 0) {
       Column({ space: 10 }) {
         Row({ space: 8 }) {
-          Text('语音草稿')
+          Text($r('app.string.ime_voice_draft_title'))
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor('#2E2E2E')
             .layoutWeight(1)
             .textAlign(TextAlign.Start)
 
-          Text('先确认，再插入')
+          Text($r('app.string.ime_voice_draft_hint'))
             .fontSize(10)
             .fontColor('#75767C')
         }
@@ -1337,7 +1576,7 @@ struct KeyboardPanel {
           .maxLines(4)
 
         Row({ space: 8 }) {
-          Button('插入')
+          Button($r('app.string.ime_action_insert'))
             .layoutWeight(1)
             .height(38)
             .fontSize(13)
@@ -1348,7 +1587,7 @@ struct KeyboardPanel {
               void imeRuntime.getSessionManager()?.insertVoiceDraft();
             })
 
-          Button('清空')
+          Button($r('app.string.ime_action_clear'))
             .layoutWeight(1)
             .height(38)
             .fontSize(13)
@@ -1373,7 +1612,7 @@ struct KeyboardPanel {
     if (this.uiState.showPolishSuggestion || this.uiState.canRevertPolish) {
       Column({ space: 8 }) {
         if (this.uiState.showPolishSuggestion) {
-          Text('润色建议')
+          Text($r('app.string.ime_polish_suggestion_title'))
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor('#2E2E2E')
@@ -1397,7 +1636,7 @@ struct KeyboardPanel {
             .maxLines(3)
 
           Row({ space: 8 }) {
-            Button('应用')
+            Button($r('app.string.ime_action_apply'))
               .layoutWeight(1)
               .height(38)
               .fontSize(13)
@@ -1408,7 +1647,7 @@ struct KeyboardPanel {
               void imeRuntime.getSessionManager()?.acceptPolishSuggestion();
             })
 
-            Button('保留原文')
+            Button($r('app.string.ime_action_keep_original'))
               .layoutWeight(1)
               .height(38)
               .fontSize(13)
@@ -1422,13 +1661,13 @@ struct KeyboardPanel {
           .width('100%')
         } else {
           Row({ space: 8 }) {
-            Text('已应用润色结果。')
+            Text($r('app.string.ime_polish_applied'))
               .layoutWeight(1)
               .fontSize(12)
               .fontColor('#4C4D52')
               .textAlign(TextAlign.Start)
 
-            Button('撤销')
+            Button($r('app.string.ime_action_undo'))
               .width(84)
               .height(36)
               .fontSize(13)
@@ -1450,6 +1689,276 @@ struct KeyboardPanel {
   }
 
   @Builder
+  private renderExpandedCandidateKeyboard() {
+    Row({ space: EXPANDED_CANDIDATE_GAP }) {
+      this.renderExpandedPinyinRail()
+      this.renderExpandedCandidateGrid()
+      this.renderExpandedCandidateActions()
+    }
+    .width('100%')
+    .height('100%')
+    .padding({
+      left: 8,
+      right: 8,
+      top: EXPANDED_CANDIDATE_TOP_PADDING,
+      bottom: EXPANDED_CANDIDATE_BOTTOM_PADDING
+    })
+    .backgroundColor('#D9DCE2')
+  }
+
+  @Builder
+  private renderExpandedPinyinRail() {
+    Column({ space: 0 }) {
+      ForEach(EXPANDED_PINYIN_ROWS, (row: number) => {
+        Text(this.resolveExpandedPinyinText(row))
+          .fontSize(EXPANDED_PINYIN_FONT_SIZE)
+          .fontWeight(FontWeight.Normal)
+          .fontColor('#050608')
+          .width('100%')
+          .layoutWeight(1)
+          .padding({ left: EXPANDED_CANDIDATE_TEXT_PADDING, right: EXPANDED_CANDIDATE_TEXT_PADDING })
+          .textAlign(TextAlign.Center)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }, (row: number): string => `pinyin-${row}`)
+    }
+    .layoutWeight(EXPANDED_CANDIDATE_SIDE_WEIGHT)
+    .height('100%')
+    .backgroundColor(QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
+  }
+
+  @Builder
+  private renderExpandedCandidateGrid() {
+    Column({ space: 0 }) {
+      ForEach(EXPANDED_CANDIDATE_ROWS, (row: number) => {
+        Row({ space: 0 }) {
+          ForEach(EXPANDED_CANDIDATE_COLUMNS, (column: number) => {
+            this.renderExpandedCandidateCell(row * EXPANDED_CANDIDATE_COLUMNS.length + column)
+          }, (column: number): string => `candidate-cell-${row}-${column}`)
+        }
+        .width('100%')
+        .layoutWeight(1)
+      }, (row: number): string => `candidate-row-${row}`)
+    }
+    .layoutWeight(EXPANDED_CANDIDATE_GRID_WEIGHT)
+    .height('100%')
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#ECEEF2' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyWhiteKeyShadow())
+  }
+
+  @Builder
+  private renderExpandedCandidateCell(displayIndex: number) {
+    Text(this.resolveExpandedCandidateText(displayIndex))
+      .fontSize(EXPANDED_CANDIDATE_FONT_SIZE)
+      .minFontSize(16)
+      .maxFontSize(EXPANDED_CANDIDATE_FONT_SIZE)
+      .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+      .fontWeight(FontWeight.Normal)
+      .fontColor('#050608')
+      .layoutWeight(1)
+      .height('100%')
+      .padding({ left: EXPANDED_CANDIDATE_TEXT_PADDING, right: EXPANDED_CANDIDATE_TEXT_PADDING })
+      .textAlign(TextAlign.Center)
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .border({ width: 0.5, color: '#E5E7EB' })
+      .backgroundColor(this.hasExpandedCandidateAt(displayIndex) ? '#FFFFFF' : '#FAFAFB')
+      .onClick(() => {
+        this.selectExpandedCandidate(displayIndex);
+      })
+  }
+
+  @Builder
+  private renderExpandedCandidateActions() {
+    Column({ space: EXPANDED_CANDIDATE_GAP }) {
+      this.renderExpandedCandidateActionButton($r('app.string.ime_candidate_return'), (): void => {
+        this.showExpandedCandidateBoard = false;
+      })
+
+      this.renderExpandedCandidateIconButton('backspace', (): void => {
+        void imeRuntime.getSessionManager()?.pressBackspace();
+      })
+
+      this.renderExpandedCandidateModeButton()
+
+      Column({ space: 0 }) {
+        this.renderExpandedCandidateArrowButton(
+          '↑',
+          this.canPageExpandedCandidateBackward(),
+          (): void => {
+            this.pageExpandedCandidateBackward();
+          },
+          this.canTriggerExpandedCandidateBackward()
+        )
+
+        this.renderExpandedCandidateArrowButton(
+          '↓',
+          this.canPageExpandedCandidateForward(),
+          (): void => {
+            this.pageExpandedCandidateForward();
+          }
+        )
+      }
+      .width('100%')
+      .layoutWeight(EXPANDED_CANDIDATE_ACTION_ARROW_WEIGHT)
+      .clip(true)
+      .backgroundColor(QWERTY_GRAY_KEY_COLOR)
+      .border({ width: 1, color: QWERTY_GRAY_KEY_BORDER_COLOR })
+      .borderRadius(QWERTY_KEY_RADIUS)
+      .shadow(this.resolveQwertyGrayKeyShadow())
+    }
+    .layoutWeight(EXPANDED_CANDIDATE_ACTION_WEIGHT)
+    .height('100%')
+  }
+
+  @Builder
+  private renderExpandedCandidateActionButton(label: ResourceStr, action: () => void) {
+    Button() {
+      Text(label)
+        .fontSize(EXPANDED_ACTION_FONT_SIZE)
+        .minFontSize(14)
+        .maxFontSize(EXPANDED_ACTION_FONT_SIZE)
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#050608')
+        .width('100%')
+        .padding({ left: EXPANDED_CANDIDATE_TEXT_PADDING, right: EXPANDED_CANDIDATE_TEXT_PADDING })
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .backgroundColor(QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderExpandedCandidateArrowButton(label: string, enabled: boolean, action: () => void,
+    clickable: boolean = enabled) {
+    Column() {
+      Text(label)
+        .fontSize(EXPANDED_ARROW_FONT_SIZE)
+        .fontWeight(FontWeight.Lighter)
+        .fontColor(clickable ? '#050608' : '#8C9098')
+        .width('100%')
+        .height(EXPANDED_ARROW_TEXT_HEIGHT)
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+        .clip(true)
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .clip(true)
+    .onClick(() => {
+      if (clickable) {
+        action();
+      }
+    })
+  }
+
+  private canPageExpandedCandidateBackward(): boolean {
+    return this.expandedCandidatePageNo > 0 ||
+      this.expandedCandidateCanPageBackward ||
+      this.uiState.hasPreviousCandidatePage ||
+      this.uiState.candidatePageNo > 0;
+  }
+
+  private canPageExpandedCandidateForward(): boolean {
+    return this.uiState.hasNextCandidatePage;
+  }
+
+  private canTriggerExpandedCandidateBackward(): boolean {
+    return this.uiState.candidates.length > 0 || this.canPageExpandedCandidateBackward();
+  }
+
+  private pageExpandedCandidateBackward(): void {
+    if (this.expandedCandidatePageNo > 0) {
+      this.expandedCandidatePageNo--;
+    }
+    // Keep the backward arrow visually enabled as long as we have not
+    // confirmed reaching page 0. The real Rime state will be synced
+    // asynchronously via syncExpandedCandidatePageState; until then we
+    // optimistically show the arrow as usable so the user doesn't see
+    // a brief grey flicker when paging backward quickly.
+    this.expandedCandidateCanPageBackward =
+      this.expandedCandidatePageNo > 0 ||
+      this.uiState.hasPreviousCandidatePage ||
+      this.uiState.candidatePageNo > 0;
+    void imeRuntime.getSessionManager()?.pageCandidateBackward();
+  }
+
+  private pageExpandedCandidateForward(): void {
+    if (this.canPageExpandedCandidateForward()) {
+      this.expandedCandidatePageNo = Math.max(1, this.expandedCandidatePageNo + 1, this.uiState.candidatePageNo + 1);
+      this.expandedCandidateCanPageBackward = true;
+    }
+    void imeRuntime.getSessionManager()?.pageCandidateForward();
+  }
+
+  @Builder
+  private renderExpandedCandidateIconButton(kind: string, action: () => void) {
+    Button() {
+      this.renderIconAsset(kind, 40, 32)
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .backgroundColor(QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderExpandedCandidateModeButton() {
+    Button() {
+      Row({ space: 0 }) {
+        Text($r('app.string.ime_candidate_mode_full'))
+          .fontSize(EXPANDED_ACTION_FONT_SIZE)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.expandedCandidateSingleMode ? '#8D919A' : '#050608')
+
+        Text($r('app.string.ime_candidate_mode_single'))
+          .fontSize(EXPANDED_ACTION_SECONDARY_FONT_SIZE)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.expandedCandidateSingleMode ? '#050608' : '#8D919A')
+          .margin({ top: 6 })
+      }
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .backgroundColor(QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .onClick(() => {
+      this.expandedCandidateSingleMode = !this.expandedCandidateSingleMode;
+    })
+  }
+
+  @Builder
   private renderReferenceNineKeyKeyboard() {
     Column() {
       Row({ space: 4 }) {
@@ -1459,8 +1968,8 @@ struct KeyboardPanel {
           // Weight has no effect on horizontal size inside a vertical Column;
           // the button fills the 70px column width via width('100%') in the
           // builder. Keep weight=1 to document "single child takes natural row".
-          this.renderBottomActionKey('符号', this.showSymbolKeyboard, (): void => {
-            this.openSymbolKeyboard();
+          this.renderBottomActionKey('符号', this.showSymbolKeyboard && this.symbolKeyboardVariant === 'symbol', (): void => {
+            this.openSymbolKeyboard('symbol');
           }, true, 1)
         }
         .width(70)
@@ -1493,8 +2002,8 @@ struct KeyboardPanel {
 
             this.renderVoicePadKey()
 
-            this.renderBottomActionKey('123', this.showSymbolKeyboard, (): void => {
-              this.openSymbolKeyboard();
+            this.renderBottomActionKey('123', this.showSymbolKeyboard && this.symbolKeyboardVariant === 'number', (): void => {
+              this.openSymbolKeyboard('number');
             }, true, 1)
           }
           .width('100%')
@@ -1527,14 +2036,12 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertyKeyboard() {
-    // All four rows use layoutWeight sums that add up to 10 with tighter
-    // horizontal gaps, so every row renders with identical overall width and
-    // each letter-weight-unit scales consistently.
-    // justifyContext: SpaceBetween distributes rows evenly so the bottom row
-    // sits flush against the keyboard space bottom, matching symbol-keyboard.
-    Column() {
+    // The 26-key body keeps the screenshot's own aspect ratio. Do not let it
+    // eat all remaining panel height: SpaceBetween would stretch row gaps on
+    // taller phones and make the keyboard look unlike the reference.
+    Column({ space: this.resolveReferenceQwertyRowGap() }) {
       // Row 1 — 10 letter keys (Q..P), weight 1 each; 9 gaps.
-      Row({ space: 3 }) {
+      Row({ space: this.resolveReferenceQwertyKeyGap() }) {
         ForEach(QWERTY_TOP_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
         }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
@@ -1545,7 +2052,7 @@ struct KeyboardPanel {
       // each side, so letters sit offset from Row 1 the way iOS renders it.
       // Blank() (empty Column) + layoutWeight(0.5) gives a pixel-scaled
       // indent that tracks the panel width instead of a fixed pad.
-      Row({ space: 3 }) {
+      Row({ space: this.resolveReferenceQwertyKeyGap() }) {
         Column().layoutWeight(0.5)
         ForEach(QWERTY_MIDDLE_KEYS, (descriptor: QwertyKeyDescriptor) => {
           this.renderReferenceQwertyLetterKey(descriptor)
@@ -1555,7 +2062,7 @@ struct KeyboardPanel {
       .width('100%')
 
       // Row 3 — ⇧ (weight 1.5) + 7 letters (weight 1) + ⌫ (weight 1.5) = 10.
-      Row({ space: 3 }) {
+      Row({ space: this.resolveReferenceQwertyKeyGap() }) {
         this.renderReferenceQwertySideKey('⇧', (): void => {
           this.toggleQwertyLetterCase();
         }, this.isQwertyUppercase(), 1.5)
@@ -1570,77 +2077,289 @@ struct KeyboardPanel {
       }
       .width('100%')
 
-      // Row 4 — 符号(1.8) 中/英(1.1) !,(0.8) 空格(2.5) ?.(0.8) 123(1.1) 完成(1.8)
-      // = 9.9 total, visually matching the reference proportion where 符号 /
-      // 完成 are the wide left/right anchors and the central space key spans
-      // about 2.5 letter-key widths.
-      Row({ space: 3 }) {
+      // Row 4 follows the screenshot proportions: side action keys are wide,
+      // punctuation keys stay close to a letter key, and the space key spans
+      // just under three letter-key units.
+      Row({ space: this.resolveReferenceQwertyKeyGap() }) {
         this.renderReferenceQwertyBottomActionKey('符号', (): void => {
-          this.openSymbolKeyboard();
-        }, this.showSymbolKeyboard, 1.8)
+          this.openSymbolKeyboard('symbol');
+        }, this.showSymbolKeyboard && this.symbolKeyboardVariant === 'symbol', QWERTY_BOTTOM_SIDE_WEIGHT)
 
         this.renderReferenceQwertyBottomActionKey(this.resolveQuickSwitchLabel(), (): void => {
           this.switchQuickSubtype();
-        }, false, 1.1)
+        }, false, QWERTY_BOTTOM_QUICK_WEIGHT)
 
         this.renderReferenceQwertyPunctuationKey(this.resolveQwertyCommaLabel(), (): void => {
           void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyCommaOutput());
-        }, 0.8)
+        }, QWERTY_BOTTOM_PUNCTUATION_WEIGHT)
 
-        this.renderReferenceQwertySpaceKey(2.5)
+        this.renderReferenceQwertySpaceKey(QWERTY_BOTTOM_SPACE_WEIGHT)
 
         this.renderReferenceQwertyPunctuationKey(this.resolveQwertyPeriodLabel(), (): void => {
           void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyPeriodOutput());
-        }, 0.8)
+        }, QWERTY_BOTTOM_PUNCTUATION_WEIGHT)
 
         this.renderReferenceQwertyBottomActionKey('123', (): void => {
-          this.openSymbolKeyboard();
-        }, this.showSymbolKeyboard, 1.1)
+          this.openSymbolKeyboard('number');
+        }, this.showSymbolKeyboard && this.symbolKeyboardVariant === 'number', QWERTY_BOTTOM_QUICK_WEIGHT)
 
-        this.renderReferenceQwertyBottomActionKey('完成', (): void => {
+        this.renderReferenceQwertyBottomActionKey('换行', (): void => {
           void imeRuntime.getSessionManager()?.pressEnter();
-        }, false, 1.8)
+        }, false, QWERTY_BOTTOM_SIDE_WEIGHT)
       }
       .width('100%')
     }
     .width('100%')
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.SpaceBetween)
+    .height(this.resolveReferenceQwertyHeight())
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   @Builder
   private renderReferenceSymbolKeyboard() {
-    Column({ space: 3 }) {
+    if (this.symbolKeyboardVariant === 'number') {
+      this.renderReferenceNumberKeyboard()
+    } else {
+      this.renderReferencePunctuationSymbolKeyboard()
+    }
+  }
+
+  @Builder
+  private renderReferencePunctuationSymbolKeyboard() {
+    Column({ space: this.resolveReferenceQwertyRowGap() }) {
       this.renderSymbolKeyRow(SYMBOL_DIGIT_ROW)
 
       if (this.symbolKeyboardMorePage) {
-        this.renderSymbolKeyRow(SYMBOL_MORE_ROW_2)
+        this.renderSymbolIndentedKeyRow(SYMBOL_MORE_ROW_2)
         this.renderSymbolKeyRow(SYMBOL_MORE_ROW_3)
       } else {
-        this.renderSymbolKeyRow(SYMBOL_PRIMARY_ROW_2)
+        this.renderSymbolIndentedKeyRow(SYMBOL_PRIMARY_ROW_2)
         this.renderSymbolKeyRow(SYMBOL_PRIMARY_ROW_3)
       }
 
       this.renderSymbolKeyboardBottomRow()
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(this.resolveReferenceQwertyHeight())
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
   }
 
   @Builder
+  private renderReferenceNumberKeyboard() {
+    Row({ space: this.resolveReferenceNumberKeyboardGap() }) {
+      Column({ space: this.resolveReferenceNumberKeyboardGap() }) {
+        this.renderNumberOperatorRail()
+        this.renderNumberKeyboardActionTextKey('符号', (): void => {
+          this.symbolKeyboardVariant = 'symbol';
+          this.symbolKeyboardMorePage = false;
+        })
+      }
+      .layoutWeight(NUMBER_KEYBOARD_SIDE_WEIGHT)
+      .height(this.resolveReferenceNumberKeyboardHeight())
+
+      Column({ space: this.resolveReferenceNumberKeyboardGap() }) {
+        ForEach(NUMBER_DIGIT_ROWS, (row: string[]) => {
+          Row({ space: this.resolveReferenceNumberKeyboardGap() }) {
+            ForEach(row, (digit: string) => {
+              this.renderNumberKeyboardTextKey(digit, digit)
+            }, (digit: string): string => `number-${digit}`)
+          }
+          .width('100%')
+          .height(this.resolveReferenceNumberKeyboardRowHeight())
+        }, (row: string[]): string => `number-row-${row[0]}`)
+
+        Row({ space: this.resolveReferenceNumberKeyboardGap() }) {
+          this.renderNumberKeyboardSpaceKey()
+          this.renderNumberKeyboardTextKey('0', '0')
+          this.renderNumberKeyboardActionTextKey('返回', (): void => {
+            this.closeSymbolKeyboard();
+          })
+        }
+        .width('100%')
+        .height(this.resolveReferenceNumberKeyboardRowHeight())
+      }
+      .layoutWeight(NUMBER_KEYBOARD_DIGIT_GROUP_WEIGHT)
+      .height(this.resolveReferenceNumberKeyboardHeight())
+
+      Column({ space: this.resolveReferenceNumberKeyboardGap() }) {
+        this.renderNumberKeyboardBackspaceKey()
+        this.renderNumberKeyboardActionTextKey('@', (): void => {
+          this.insertSymbolText('@');
+        })
+        this.renderNumberKeyboardActionTextKey('.', (): void => {
+          this.insertSymbolText('.');
+        })
+        this.renderNumberKeyboardActionTextKey('换行', (): void => {
+          void imeRuntime.getSessionManager()?.pressEnter();
+        })
+      }
+      .layoutWeight(NUMBER_KEYBOARD_SIDE_WEIGHT)
+      .height(this.resolveReferenceNumberKeyboardHeight())
+    }
+    .width('100%')
+    .height(this.resolveReferenceNumberKeyboardHeight())
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+  }
+
+  @Builder
+  private renderNumberOperatorRail() {
+    Column({ space: 0 }) {
+      ForEach(NUMBER_OPERATOR_KEYS, (symbol: string) => {
+        Text(symbol)
+          .width('100%')
+          .layoutWeight(1)
+          .fontSize(this.resolveReferenceNumberKeyboardFontSize(NUMBER_KEYBOARD_OPERATOR_FONT_SIZE))
+          .minFontSize(12)
+          .maxFontSize(this.resolveReferenceNumberKeyboardFontSize(NUMBER_KEYBOARD_OPERATOR_FONT_SIZE))
+          .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+          .fontWeight(FontWeight.Normal)
+          .fontColor('#050608')
+          .textAlign(TextAlign.Center)
+          .maxLines(1)
+          .onClick(() => {
+            this.insertSymbolText(symbol);
+          })
+      }, (symbol: string): string => `operator-${symbol}`)
+    }
+    .width('100%')
+    .height(this.resolveReferenceNumberKeyboardTallHeight())
+    .justifyContent(FlexAlign.SpaceAround)
+    .alignItems(HorizontalAlign.Center)
+    .backgroundColor(QWERTY_WHITE_KEY_COLOR)
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyWhiteKeyShadow())
+    .clip(true)
+  }
+
+  @Builder
+  private renderNumberKeyboardTextKey(label: string, output: string) {
+    Button() {
+      Text(label)
+        .fontSize(this.resolveReferenceNumberKeyboardFontSize(NUMBER_KEYBOARD_DIGIT_FONT_SIZE))
+        .minFontSize(13)
+        .maxFontSize(this.resolveReferenceNumberKeyboardFontSize(NUMBER_KEYBOARD_DIGIT_FONT_SIZE))
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Normal)
+        .fontColor('#050608')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    }
+    .layoutWeight(1)
+    .height(this.resolveReferenceNumberKeyboardRowHeight())
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .backgroundColor(QWERTY_WHITE_KEY_COLOR)
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyWhiteKeyShadow())
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
+    .clip(true)
+    .onClick(() => {
+      this.insertSymbolText(output);
+    })
+  }
+
+  @Builder
+  private renderNumberKeyboardActionTextKey(label: string, action: () => void) {
+    Button() {
+      Text(label)
+        .fontSize(this.resolveReferenceNumberKeyboardFontSize(NUMBER_KEYBOARD_ACTION_FONT_SIZE))
+        .minFontSize(12)
+        .maxFontSize(this.resolveReferenceNumberKeyboardFontSize(NUMBER_KEYBOARD_ACTION_FONT_SIZE))
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#050608')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .height(this.resolveReferenceNumberKeyboardRowHeight())
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .backgroundColor(QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .clip(true)
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderNumberKeyboardBackspaceKey() {
+    Button() {
+      this.renderIconAsset('backspace', this.resolveReferenceNumberKeyboardScaledSize(38),
+        this.resolveReferenceNumberKeyboardScaledSize(29))
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .height(this.resolveReferenceNumberKeyboardRowHeight())
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .backgroundColor(QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
+    .stateStyles({ pressed: this.pressedGrayKeyStyle })
+    .clip(true)
+    .onClick(() => {
+      void imeRuntime.getSessionManager()?.pressBackspace();
+    })
+  }
+
+  @Builder
+  private renderNumberKeyboardSpaceKey() {
+    Column({ space: this.resolveReferenceNumberKeyboardScaledSize(4) }) {
+      this.renderIconAsset('mic', this.resolveReferenceNumberKeyboardScaledSize(25),
+        this.resolveReferenceNumberKeyboardScaledSize(22), 0.76)
+
+      Row() {
+        Column()
+          .width(this.resolveReferenceNumberKeyboardScaledSize(3))
+          .height(this.resolveReferenceNumberKeyboardScaledSize(10))
+          .backgroundColor('#111214')
+
+        Column()
+          .width(this.resolveReferenceNumberKeyboardScaledSize(43))
+          .height(this.resolveReferenceNumberKeyboardScaledSize(3))
+          .backgroundColor('#111214')
+
+        Column()
+          .width(this.resolveReferenceNumberKeyboardScaledSize(3))
+          .height(this.resolveReferenceNumberKeyboardScaledSize(10))
+          .backgroundColor('#111214')
+      }
+      .height(this.resolveReferenceNumberKeyboardScaledSize(12))
+      .alignItems(VerticalAlign.Bottom)
+    }
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .layoutWeight(1)
+    .height(this.resolveReferenceNumberKeyboardRowHeight())
+    .backgroundColor(QWERTY_WHITE_KEY_COLOR)
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyWhiteKeyShadow())
+    .stateStyles({ pressed: this.pressedWhiteKeyStyle })
+    .clip(true)
+    .onClick(() => {
+      this.commitText(' ');
+    })
+  }
+
+  @Builder
   private renderSymbolKeyboardHeader() {
-    Row() {
-      Row({ space: 34 }) {
+    Row({ space: 0 }) {
+      Row({ space: 0 }) {
         ForEach(SYMBOL_CATEGORY_KEYS, (symbol: string) => {
           Text(symbol)
-            .fontSize(15)
+            .layoutWeight(1)
+            .fontSize(this.resolveReferenceQwertyScaledSize(23))
             .fontWeight(FontWeight.Normal)
             .fontColor('#16171B')
             .textAlign(TextAlign.Center)
-            .width(36)
             .height(34)
+            .maxLines(1)
             .onClick(() => {
               this.insertSymbolText(symbol);
             })
@@ -1648,21 +2367,30 @@ struct KeyboardPanel {
       }
       .layoutWeight(1)
       .height(36)
-      .padding({ left: 22 })
       .alignItems(VerticalAlign.Center)
 
-      Button() {
+      Column()
+        .width(1)
+        .height(28)
+        .backgroundColor('#C5C8CF')
+        .margin({ left: 4, right: 8 })
+
+      Column() {
         Text('×')
-          .fontSize(15)
+          .fontSize(this.resolveReferenceQwertyScaledSize(20))
           .fontWeight(FontWeight.Normal)
           .fontColor('#64676F')
+          .width('100%')
+          .height('100%')
+          .textAlign(TextAlign.Center)
       }
       .width(34)
       .height(34)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
       .backgroundColor('rgba(0,0,0,0)')
       .border({ width: 2, color: '#787B82' })
       .borderRadius(17)
-      .padding({ left: 0, right: 0, top: 0, bottom: 2 })
       .onClick(() => {
         this.closeSymbolKeyboard();
       })
@@ -1674,18 +2402,35 @@ struct KeyboardPanel {
 
   @Builder
   private renderSymbolKeyRow(row: SymbolKeyDescriptor[]) {
-    Row({ space: 3 }) {
+    Row({ space: this.resolveReferenceQwertyKeyGap() }) {
       ForEach(row, (descriptor: SymbolKeyDescriptor) => {
         this.renderSymbolKeyboardKey(descriptor)
       }, (descriptor: SymbolKeyDescriptor): string => `${descriptor.role}-${descriptor.label}-${descriptor.output}`)
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(this.resolveReferenceQwertyRowHeight())
+  }
+
+  @Builder
+  private renderSymbolIndentedKeyRow(row: SymbolKeyDescriptor[]) {
+    Row({ space: this.resolveReferenceQwertyKeyGap() }) {
+      Column()
+        .layoutWeight(0.5)
+
+      ForEach(row, (descriptor: SymbolKeyDescriptor) => {
+        this.renderSymbolKeyboardKey(descriptor)
+      }, (descriptor: SymbolKeyDescriptor): string => `${descriptor.role}-${descriptor.label}-${descriptor.output}`)
+
+      Column()
+        .layoutWeight(0.5)
+    }
+    .width('100%')
+    .height(this.resolveReferenceQwertyRowHeight())
   }
 
   @Builder
   private renderSymbolKeyboardBottomRow() {
-    Row({ space: 3 }) {
+    Row({ space: this.resolveReferenceQwertyKeyGap() }) {
       this.renderSymbolKeyboardKey({ label: '返回', output: '', role: 'return', weight: 1.55, gray: true })
       this.renderSymbolKeyboardKey({
         label: this.resolveQwertyCommaOutput(),
@@ -1702,24 +2447,41 @@ struct KeyboardPanel {
         weight: 1,
         gray: false
       })
-      this.renderSymbolKeyboardKey({ label: '搜索', output: '', role: 'enter', weight: 1.55, gray: true })
+      this.renderSymbolKeyboardKey({ label: '换行', output: '', role: 'enter', weight: 1.55, gray: true })
     }
     .width('100%')
-    .layoutWeight(1)
+    .height(this.resolveReferenceQwertyRowHeight())
   }
 
   @Builder
   private renderSymbolKeyboardKey(descriptor: SymbolKeyDescriptor) {
     Button() {
       if (descriptor.role === 'backspace') {
-        this.renderIconAsset('backspace', 34, 26)
+        this.renderIconAsset('backspace', this.resolveReferenceQwertyScaledSize(34),
+          this.resolveReferenceQwertyScaledSize(26))
       } else if (descriptor.role === 'space') {
-        Column({ space: 2 }) {
-          this.renderIconAsset('mic', 24, 22, 0.72)
-          Column()
-            .width(42)
-            .height(3)
-            .backgroundColor('#111214')
+        Column({ space: this.resolveReferenceQwertyScaledSize(5) }) {
+          this.renderIconAsset('mic', this.resolveReferenceQwertyScaledSize(23),
+            this.resolveReferenceQwertyScaledSize(20), 0.76)
+
+          Row() {
+            Column()
+              .width(this.resolveReferenceQwertyScaledSize(3))
+              .height(this.resolveReferenceQwertyScaledSize(10))
+              .backgroundColor('#111214')
+
+            Column()
+              .width(this.resolveReferenceQwertyScaledSize(44))
+              .height(this.resolveReferenceQwertyScaledSize(3))
+              .backgroundColor('#111214')
+
+            Column()
+              .width(this.resolveReferenceQwertyScaledSize(3))
+              .height(this.resolveReferenceQwertyScaledSize(10))
+              .backgroundColor('#111214')
+          }
+          .height(this.resolveReferenceQwertyScaledSize(12))
+          .alignItems(VerticalAlign.Bottom)
         }
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Center)
@@ -1737,12 +2499,13 @@ struct KeyboardPanel {
     }
     .layoutWeight(descriptor.weight)
     .height('100%')
-    .backgroundColor(descriptor.gray ? '#C4CAD3' : '#FFFFFF')
-    .border({ width: 1, color: descriptor.gray ? '#BFC5CD' : '#F6F7F9' })
-    .borderRadius(T9_KEY_RADIUS)
-    .shadow(this.resolveWhiteKeyShadow())
+    .backgroundColor(descriptor.gray ? QWERTY_GRAY_KEY_COLOR : QWERTY_WHITE_KEY_COLOR)
+    .border({ width: 1, color: descriptor.gray ? QWERTY_GRAY_KEY_BORDER_COLOR : '#F8F9FB' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(descriptor.gray ? this.resolveQwertyGrayKeyShadow() : this.resolveQwertyWhiteKeyShadow())
     .padding({ left: 0, right: 0, top: 0, bottom: 0 })
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
+    .clip(true)
     .onClick(() => {
       this.handleSymbolKeyboardKey(descriptor);
     })
@@ -1784,7 +2547,7 @@ struct KeyboardPanel {
               // Center the polishing label inside the mic circle so the
               // status cue reads as part of the button; the surrounding
               // pulse rings still convey motion.
-              Text('润色中')
+              Text($r('app.string.ime_polishing'))
                 .fontSize(15)
                 .fontColor('#FFFFFF')
                 .fontWeight(FontWeight.Medium)
@@ -1817,11 +2580,8 @@ struct KeyboardPanel {
         .height(200)
         .alignContent(Alignment.Center)
 
-        if (this.uiState.voiceState !== 'recording' && this.uiState.voiceState !== 'starting' && this.uiState.voiceStatusText.length > 0) {
-          Text(this.uiState.voiceStatusText)
-            .fontSize(12)
-            .fontColor(this.uiState.voiceState === 'error' ? '#EF4444' : '#606168')
-            .textAlign(TextAlign.Center)
+        if (this.shouldRenderVoiceStatusLabel()) {
+          this.renderVoiceStatusLabel()
         }
       }
       .width('100%')
@@ -1970,7 +2730,7 @@ struct KeyboardPanel {
     enabled: boolean = true
   ) {
     Column() {
-      this.renderIconAsset(kind, this.resolveFeatureIconWidth(kind), 28, enabled ? 1 : 0.32)
+      this.renderIconAsset(kind, this.resolveFeatureIconWidth(kind), this.resolveFeatureIconHeight(kind), enabled ? 1 : 0.32)
     }
     .width(this.resolveFeatureButtonWidth(kind))
     .height(34)
@@ -2155,12 +2915,73 @@ struct KeyboardPanel {
         .fontColor('#1D1E22')
         .opacity(opacity)
     }
+	  }
+
+  @Builder
+  private renderVoiceStatusLabel() {
+    if (this.isVoiceStatusPermissionDenied()) {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_permission_denied'), true)
+    } else if (!this.uiState.voiceEnabled || this.isVoiceStatusUnavailable()) {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_unavailable'), this.uiState.voiceState === 'error')
+    } else if (this.isVoiceStatusNoSpeech()) {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_no_speech'), false)
+    } else if (this.uiState.isPolishRunning ||
+      this.containsVoiceStatusText('voice.polishing') ||
+      this.containsVoiceStatusText('Polishing')) {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_polishing'), false)
+    } else if (this.containsVoiceStatusText('voice.stopping') || this.containsVoiceStatusText('Stopping')) {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_stopping'), false)
+    } else if (this.containsVoiceStatusText('voice.preparing')) {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_preparing'), false)
+    } else if (this.uiState.voiceState === 'processing') {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_processing'), false)
+    } else if (this.uiState.voiceState === 'error') {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_failed'), true)
+    } else {
+      this.renderVoiceStatusText($r('app.string.ime_voice_status_idle'), false)
+    }
+  }
+
+  @Builder
+  private renderVoiceStatusText(label: ResourceStr, isError: boolean) {
+    Text(label)
+      .fontSize(12)
+      .fontColor(isError ? '#EF4444' : '#606168')
+      .textAlign(TextAlign.Center)
+  }
+
+  private shouldRenderVoiceStatusLabel(): boolean {
+    return this.uiState.voiceState !== 'recording' && this.uiState.voiceState !== 'starting';
+  }
+
+  private isVoiceStatusPermissionDenied(): boolean {
+    return this.containsVoiceStatusText('permission denied') ||
+      this.containsVoiceStatusText('Permission denied') ||
+      this.containsVoiceStatusText('voice.permission_denied') ||
+      this.containsVoiceStatusText('麦克风权限');
+  }
+
+  private isVoiceStatusUnavailable(): boolean {
+    return this.containsVoiceStatusText('unavailable') ||
+      this.containsVoiceStatusText('Unavailable') ||
+      this.containsVoiceStatusText('voice.unavailable') ||
+      this.containsVoiceStatusText('不可用');
+  }
+
+  private isVoiceStatusNoSpeech(): boolean {
+    return this.containsVoiceStatusText('voice.no_speech') ||
+      this.containsVoiceStatusText('未检测到语音') ||
+      this.containsVoiceStatusText('No speech');
+  }
+
+  private containsVoiceStatusText(fragment: string): boolean {
+    return this.uiState.voiceStatusText.indexOf(fragment) >= 0;
   }
 
   @Builder
   private renderPunctuationRail() {
     Column({ space: 9 }) {
-      ForEach(SIDE_PUNCTUATIONS, (symbol: string) => {
+      ForEach(this.resolveSidePunctuations(), (symbol: string) => {
         Text(symbol)
           .fontSize(15)
           .fontColor('#171717')
@@ -2170,7 +2991,7 @@ struct KeyboardPanel {
           .borderRadius(10)
           .stateStyles({ pressed: this.pressedWhiteKeyStyle })
           .onClick(() => {
-            this.commitText(symbol);
+            this.insertSymbolText(symbol);
           })
       }, (symbol: string): string => symbol)
     }
@@ -2337,28 +3158,28 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertyLetterKey(descriptor: QwertyKeyDescriptor) {
-    Column({ space: 1 }) {
+    Column({ space: 0 }) {
       Text(descriptor.hint)
-        .fontSize(8)
-        .fontColor('#A4A6AD')
+        .fontSize(9)
+        .fontColor('#8F9299')
 
       Text(this.resolveQwertyLetterLabel(descriptor.value))
-        .fontSize(15)
-        .minFontSize(10)
-        .maxFontSize(15)
+        .fontSize(20)
+        .minFontSize(12)
+        .maxFontSize(20)
         .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .maxLines(1)
         .fontWeight(FontWeight.Normal)
-        .fontColor('#17181C')
+        .fontColor('#050608')
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .layoutWeight(1)
     .height(this.resolveReferenceQwertyRowHeight())
-    .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(T9_KEY_RADIUS)
-    .shadow(this.resolveWhiteKeyShadow())
+    .backgroundColor(QWERTY_WHITE_KEY_COLOR)
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyWhiteKeyShadow())
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
       this.handleReferenceQwertyLetterInput(descriptor.value);
@@ -2390,10 +3211,10 @@ struct KeyboardPanel {
     }
     .layoutWeight(weight)
     .height(this.resolveReferenceQwertyRowHeight())
-    .backgroundColor(active ? '#D9E3D0' : '#C9CAD3')
-    .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
-    .borderRadius(T9_KEY_RADIUS)
-    .shadow(this.resolveGrayKeyShadow())
+    .backgroundColor(active ? QWERTY_ACTIVE_KEY_COLOR : QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: active ? QWERTY_ACTIVE_KEY_BORDER_COLOR : QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
     .stateStyles({ pressed: this.pressedGrayKeyStyle })
     .onClick(() => {
       action();
@@ -2413,10 +3234,10 @@ struct KeyboardPanel {
     }
     .layoutWeight(weight)
     .height(this.resolveReferenceQwertyBottomHeight())
-    .backgroundColor(active ? '#D9E3D0' : '#C9CAD3')
-    .border({ width: 1, color: active ? '#DCE4D5' : '#CDD1D8' })
-    .borderRadius(T9_KEY_RADIUS)
-    .shadow(this.resolveGrayKeyShadow())
+    .backgroundColor(active ? QWERTY_ACTIVE_KEY_COLOR : QWERTY_GRAY_KEY_COLOR)
+    .border({ width: 1, color: active ? QWERTY_ACTIVE_KEY_BORDER_COLOR : QWERTY_GRAY_KEY_BORDER_COLOR })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyGrayKeyShadow())
     .opacity(enabled ? 1 : 0.52)
     .stateStyles({ pressed: this.pressedGrayKeyStyle })
     .onClick(() => {
@@ -2428,14 +3249,14 @@ struct KeyboardPanel {
 
   @Builder
   private renderActionKeyLabel(label: string, fontSize: number, enabled: boolean) {
-    if (label === this.resolveQuickSwitchLabel()) {
+    if (this.isQuickSwitchLabel(label)) {
       Row({ space: 0 }) {
-        Text('中')
+        Text(this.resolveQuickSwitchPrimaryLabel())
           .fontSize(fontSize + 5)
           .fontWeight(FontWeight.Medium)
           .fontColor(enabled ? '#1E2024' : '#B5B7BE')
 
-        Text('/英')
+        Text(`/${this.resolveQuickSwitchSecondaryLabel()}`)
           .fontSize(fontSize - 1)
           .fontWeight(FontWeight.Regular)
           .fontColor(enabled ? '#8D919A' : '#C3C5CB')
@@ -2445,11 +3266,11 @@ struct KeyboardPanel {
     } else {
       Text(label)
         .fontSize(fontSize)
-        .minFontSize(9)
+        .minFontSize(11)
         .maxFontSize(fontSize)
         .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .fontWeight(FontWeight.Medium)
-        .fontColor(enabled ? '#232429' : '#B5B7BE')
+        .fontColor(enabled ? '#08090C' : '#B5B7BE')
         .maxLines(1)
     }
   }
@@ -2457,12 +3278,12 @@ struct KeyboardPanel {
   @Builder
   private renderNineQuickSwitchLabel(enabled: boolean) {
     Row({ space: 0 }) {
-      Text('中')
+      Text(this.resolveQuickSwitchPrimaryLabel())
         .fontSize(17)
         .fontWeight(FontWeight.Medium)
         .fontColor(enabled ? '#1F2024' : '#B5B7BE')
 
-      Text('/英')
+      Text(`/${this.resolveQuickSwitchSecondaryLabel()}`)
         .fontSize(9)
         .fontWeight(FontWeight.Regular)
         .fontColor(enabled ? '#8E9199' : '#C3C5CB')
@@ -2477,25 +3298,30 @@ struct KeyboardPanel {
     action: () => void,
     weight: number = 0.76
   ) {
-    Column() {
+    Column({ space: 0 }) {
+      Text(label === this.resolveQwertyCommaLabel() ? '!' : '?')
+        .fontSize(9)
+        .fontColor('#8F9299')
+        .textAlign(TextAlign.Center)
+
       Text(label)
-        .fontSize(18)
+        .fontSize(20)
         .minFontSize(12)
-        .maxFontSize(18)
+        .maxFontSize(20)
         .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
         .maxLines(1)
         .fontWeight(FontWeight.Medium)
-        .fontColor('#16171B')
+        .fontColor('#050608')
         .textAlign(TextAlign.Center)
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .layoutWeight(weight)
     .height(this.resolveReferenceQwertyBottomHeight())
-    .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(T9_KEY_RADIUS)
-    .shadow(this.resolveWhiteKeyShadow())
+    .backgroundColor(QWERTY_WHITE_KEY_COLOR)
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyWhiteKeyShadow())
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
       action();
@@ -2504,22 +3330,36 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertySpaceKey(weight: number = 2.5) {
-    // The 26-key layout uses a dedicated space key in the centre of the
-    // bottom row. It stays a plain space bar regardless of voice settings.
-    Column() {
-      Text(this.resolveReferenceQwertySpaceLabel())
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#6F737B')
+    Column({ space: 5 }) {
+      this.renderIconAsset('mic', 23, 20, 0.76)
+
+      Row() {
+        Column()
+          .width(3)
+          .height(10)
+          .backgroundColor('#111214')
+
+        Column()
+          .width(44)
+          .height(3)
+          .backgroundColor('#111214')
+
+        Column()
+          .width(3)
+          .height(10)
+          .backgroundColor('#111214')
+      }
+      .height(12)
+      .alignItems(VerticalAlign.Bottom)
     }
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
     .layoutWeight(weight)
     .height(this.resolveReferenceQwertyBottomHeight())
-    .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#F6F7F9' })
-    .borderRadius(T9_KEY_RADIUS)
-    .shadow(this.resolveWhiteKeyShadow())
+    .backgroundColor(QWERTY_WHITE_KEY_COLOR)
+    .border({ width: 1, color: '#F8F9FB' })
+    .borderRadius(QWERTY_KEY_RADIUS)
+    .shadow(this.resolveQwertyWhiteKeyShadow())
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
       this.commitText(' ');
@@ -2564,6 +3404,24 @@ struct KeyboardPanel {
     };
   }
 
+  private resolveQwertyWhiteKeyShadow(): ShadowOptions {
+    return {
+      radius: 1.4,
+      color: '#36000000',
+      offsetX: 0,
+      offsetY: 2
+    };
+  }
+
+  private resolveQwertyGrayKeyShadow(): ShadowOptions {
+    return {
+      radius: 1.4,
+      color: '#2C000000',
+      offsetX: 0,
+      offsetY: 2
+    };
+  }
+
   private resolveSettingsTabShadow(selected: boolean): ShadowOptions {
     if (selected) {
       return this.resolveWhiteKeyShadow();
@@ -2591,7 +3449,7 @@ struct KeyboardPanel {
       return 30;
     }
     if (kind === 'gear') {
-      return 28;
+      return 36;
     }
     if (kind === 'chevron') {
       return 26;
@@ -2599,8 +3457,15 @@ struct KeyboardPanel {
     return 28;
   }
 
+  private resolveFeatureIconHeight(kind: string): number {
+    if (kind === 'gear') {
+      return 36;
+    }
+    return 28;
+  }
+
   private resolveBottomActionFontSize(label: string): number {
-    if (label === '中/英') {
+    if (this.isQuickSwitchLabel(label)) {
       return 10;
     }
     if (label === '符号') {
@@ -2613,32 +3478,85 @@ struct KeyboardPanel {
   }
 
   private resolveReferenceQwertyHeight(): number {
-    return 202;
+    return this.resolveReferenceQwertyScaledSize(QWERTY_REFERENCE_HEIGHT);
   }
 
   private resolveReferenceQwertyRowHeight(): number {
-    return 46;
+    return this.resolveReferenceQwertyScaledSize(QWERTY_REFERENCE_ROW_HEIGHT);
   }
 
   private resolveReferenceQwertyBottomHeight(): number {
-    return 44;
+    return this.resolveReferenceQwertyScaledSize(QWERTY_REFERENCE_ROW_HEIGHT);
+  }
+
+  private resolveReferenceQwertyRowGap(): number {
+    return this.resolveReferenceQwertyScaledSize(QWERTY_REFERENCE_ROW_GAP);
+  }
+
+  private resolveReferenceQwertyKeyGap(): number {
+    return this.resolveReferenceQwertyScaledSize(QWERTY_KEY_GAP);
+  }
+
+  private resolveReferenceQwertyScaledSize(referenceSize: number): number {
+    return Math.max(1, Math.round(this.resolveReferenceQwertyContentWidth() *
+      referenceSize / QWERTY_REFERENCE_CONTENT_WIDTH));
+  }
+
+  private resolveReferenceQwertyContentWidth(): number {
+    try {
+      let currentDisplay = display.getDefaultDisplaySync();
+      return Math.max(QWERTY_MIN_CONTENT_WIDTH, px2vp(currentDisplay.width) - QWERTY_REFERENCE_HORIZONTAL_PADDING);
+    } catch (_) {
+      return QWERTY_REFERENCE_CONTENT_WIDTH;
+    }
+  }
+
+  private resolveReferenceNumberKeyboardRowHeight(): number {
+    return this.resolveReferenceNumberKeyboardScaledSize(NUMBER_KEYBOARD_REFERENCE_ROW_HEIGHT);
+  }
+
+  private resolveReferenceNumberKeyboardGap(): number {
+    return this.resolveReferenceNumberKeyboardScaledSize(NUMBER_KEYBOARD_REFERENCE_GAP);
+  }
+
+  private resolveReferenceNumberKeyboardTallHeight(): number {
+    return this.resolveReferenceNumberKeyboardRowHeight() * 3 + this.resolveReferenceNumberKeyboardGap() * 2;
+  }
+
+  private resolveReferenceNumberKeyboardHeight(): number {
+    return this.resolveReferenceNumberKeyboardRowHeight() * 4 + this.resolveReferenceNumberKeyboardGap() * 3;
+  }
+
+  private resolveReferenceNumberKeyboardFontSize(referenceSize: number): number {
+    return Math.max(10, this.resolveReferenceNumberKeyboardScaledSize(referenceSize));
+  }
+
+  private resolveReferenceNumberKeyboardScaledSize(referenceSize: number): number {
+    return Math.max(1, Math.round(this.resolveReferenceQwertyContentWidth() *
+      referenceSize / NUMBER_KEYBOARD_REFERENCE_CONTENT_WIDTH));
   }
 
   private resolveReferenceQwertyBottomFontSize(label: string): number {
-    if (label === '中/英') {
-      return 9;
+    if (this.isQuickSwitchLabel(label)) {
+      return 13;
     }
-    if (label === '完成' || label === '符号') {
-      return 12;
+    if (label === '换行' || label === '符号') {
+      return 17;
     }
     if (label === '123') {
-      return 11;
+      return 18;
     }
-    return label.length > 2 ? 10 : 12;
+    return label.length > 2 ? 14 : 17;
   }
 
   private resolveSymbolKeyboardFontSize(descriptor: SymbolKeyDescriptor): number {
-    return 15;
+    if (descriptor.role === 'return' || descriptor.role === 'enter' || descriptor.role === 'more') {
+      return this.resolveReferenceQwertyScaledSize(18);
+    }
+    if (descriptor.label === '...') {
+      return this.resolveReferenceQwertyScaledSize(20);
+    }
+    return this.resolveReferenceQwertyScaledSize(21);
   }
 
   private resolveQwertyLetterLabel(value: string): string {
@@ -2687,6 +3605,10 @@ struct KeyboardPanel {
     return this.isEnglishPunctuationMode() ? '.' : '。';
   }
 
+  private resolveSidePunctuations(): string[] {
+    return this.isEnglishPunctuationMode() ? [',', '.', '?', '!'] : SIDE_PUNCTUATIONS;
+  }
+
   private resolveReferenceQwertySpaceLabel(): string {
     if (!this.isEnglishPunctuationMode()) {
       return '空格';
@@ -2702,14 +3624,17 @@ struct KeyboardPanel {
     void imeRuntime.getSessionManager()?.switchLetterCase(this.isQwertyUppercase() ? 'lower' : 'upper');
   }
 
-  private openSymbolKeyboard(): void {
+  private openSymbolKeyboard(variant: SymbolKeyboardVariant = 'symbol'): void {
     this.showSymbolKeyboard = true;
+    this.symbolKeyboardVariant = variant;
     this.showSymbolPalette = false;
     this.symbolKeyboardMorePage = false;
+    this.showExpandedCandidateBoard = false;
   }
 
   private closeSymbolKeyboard(): void {
     this.showSymbolKeyboard = false;
+    this.symbolKeyboardVariant = 'symbol';
     this.symbolKeyboardMorePage = false;
   }
 
@@ -2750,10 +3675,6 @@ struct KeyboardPanel {
       void imeRuntime.getSessionManager()?.acceptPolishSuggestion();
       return;
     }
-    if (this.uiState.polishEnabled && this.uiState.canPolish && !this.uiState.isPolishRunning) {
-      void imeRuntime.getSessionManager()?.polishPendingText();
-      return;
-    }
     if (this.uiState.candidates.length > 0) {
       void imeRuntime.getSessionManager()?.selectCandidate(0);
     }
@@ -2762,7 +3683,6 @@ struct KeyboardPanel {
   private canUsePrimaryAction(): boolean {
     return this.uiState.voiceDraftText.length > 0 ||
       this.uiState.showPolishSuggestion ||
-      (this.uiState.polishEnabled && this.uiState.canPolish && !this.uiState.isPolishRunning) ||
       this.uiState.candidates.length > 0;
   }
 
@@ -2856,16 +3776,14 @@ struct KeyboardPanel {
     this.showSymbolPalette = false;
     this.showSymbolKeyboard = false;
     this.symbolKeyboardMorePage = false;
+    this.showExpandedCandidateBoard = false;
   }
 
   private canToggleVoiceKeyboardMode(): boolean {
     if (this.isVoiceModeActive()) {
       return true;
     }
-    if (!this.isRuntimeVoiceEnabled()) {
-      return false;
-    }
-    return this.hasLayoutOption('voice_panel') || this.resolveVoiceSubtypeId().length > 0;
+    return this.isRuntimeVoiceEnabled();
   }
 
   private isVoiceModeActive(): boolean {
@@ -2873,11 +3791,7 @@ struct KeyboardPanel {
   }
 
   private isRuntimeVoiceEnabled(): boolean {
-    let runtime = imeRuntime.getSessionManager()?.getRuntimeSettingsSnapshot();
-    if (runtime) {
-      return runtime.enableVoice;
-    }
-    return this.runtimeEnableVoice;
+    return true;
   }
 
   private toggleVoiceKeyboardMode(): void {
@@ -2915,6 +3829,7 @@ struct KeyboardPanel {
 
     if (this.hasLayoutOption('voice_panel')) {
       await sessionManager.switchKeyboardLayout('voice_panel');
+      await sessionManager.startVoiceInput();
       return;
     }
 
@@ -2924,6 +3839,7 @@ struct KeyboardPanel {
     }
     await sessionManager.switchSubtype(voiceSubtypeId);
     await sessionManager.switchKeyboardLayout('voice_panel');
+    await sessionManager.startVoiceInput();
   }
 
   private closeSettingsOverlay(): void {
@@ -2933,6 +3849,7 @@ struct KeyboardPanel {
     this.llmSaveStatus = '';
     this.showSymbolKeyboard = false;
     this.symbolKeyboardMorePage = false;
+    this.showExpandedCandidateBoard = false;
   }
 
   private supportsNineKey(): boolean {
@@ -2965,7 +3882,11 @@ struct KeyboardPanel {
   }
 
   private resolveVoiceSubtypeId(): string {
-    return this.findSubtypeById('zh-CN-voice');
+    let voiceSubtypeId = this.findSubtypeById('zh-CN-voice');
+    if (voiceSubtypeId.length > 0) {
+      return voiceSubtypeId;
+    }
+    return this.isRuntimeVoiceEnabled() ? 'zh-CN-voice' : '';
   }
 
   private hasLayoutOption(layout: KeyboardLayoutId): boolean {
@@ -2978,7 +3899,19 @@ struct KeyboardPanel {
   }
 
   private resolveQuickSwitchLabel(): string {
-    return '中/英';
+    return `${this.resolveQuickSwitchPrimaryLabel()}/${this.resolveQuickSwitchSecondaryLabel()}`;
+  }
+
+  private resolveQuickSwitchPrimaryLabel(): string {
+    return this.isEnglishSubtype() ? '英' : '中';
+  }
+
+  private resolveQuickSwitchSecondaryLabel(): string {
+    return this.isEnglishSubtype() ? '中' : '英';
+  }
+
+  private isQuickSwitchLabel(label: string): boolean {
+    return label === '中/英' || label === '英/中';
   }
 
   private isEnglishSubtype(): boolean {
@@ -2986,6 +3919,9 @@ struct KeyboardPanel {
   }
 
   private isEnglishPunctuationMode(): boolean {
+    if (this.uiState.currentSubtypeId.length > 0) {
+      return this.isEnglishSubtype();
+    }
     return this.uiState.punctuationMode === 'en';
   }
 
@@ -3013,6 +3949,15 @@ struct KeyboardPanel {
       targetSubtype,
       this.resolvePreferredKeyboardLayoutForSubtype(targetSubtype)
     );
+    this.closeSettingsOverlay();
+  }
+
+  private async switchSettingsVoiceMode(): Promise<void> {
+    let targetSubtype = this.resolveVoiceSubtypeId();
+    if (targetSubtype.length === 0) {
+      targetSubtype = 'zh-CN-voice';
+    }
+    await this.switchSubtypeWithKeyboardLayoutAsync(targetSubtype, 'voice_panel');
     this.closeSettingsOverlay();
   }
 
@@ -3124,17 +4069,107 @@ struct KeyboardPanel {
     return '等待输入';
   }
 
-  private resolveCandidatePreeditText(): string {
-    if (this.uiState.preedit.length > 0) {
-      return this.uiState.preedit;
+  private resolveInlinePinyinText(): string {
+    if (this.isEnglishSubtype() || this.uiState.keyboardLayout === 'voice_panel') {
+      return '';
+    }
+    if (this.uiState.pinyinInput.length > 0) {
+      return formatDirectPinyinRawInput(this.uiState.pinyinInput);
     }
     if (this.uiState.activeNineKeySpelling.length > 0) {
-      return this.uiState.activeNineKeySpelling;
-    }
-    if (this.uiState.nineKeySequence.length > 0) {
-      return this.uiState.nineKeySequence;
+      return formatDirectPinyinRawInput(this.uiState.activeNineKeySpelling);
     }
     return '';
+  }
+
+  private canShowExpandedCandidateBoard(state: KeyboardUiState): boolean {
+    return !state.currentSubtypeId.startsWith('en-') &&
+      state.keyboardLayout !== 'voice_panel' &&
+      (state.pinyinInput.length > 0 || state.activeNineKeySpelling.length > 0 || state.candidates.length > 0);
+  }
+
+  private syncExpandedCandidatePageState(state: KeyboardUiState, previousInputSignature: string): void {
+    if (!this.canShowExpandedCandidateBoard(state)) {
+      this.expandedCandidatePageNo = 0;
+      this.expandedCandidateCanPageBackward = false;
+      return;
+    }
+
+    let nextInputSignature = this.resolveExpandedCandidateInputSignature(state);
+    if (previousInputSignature !== nextInputSignature || !this.showExpandedCandidateBoard) {
+      this.expandedCandidatePageNo = Math.max(0, state.candidatePageNo);
+      this.expandedCandidateCanPageBackward = state.hasPreviousCandidatePage || state.candidatePageNo > 0;
+      return;
+    }
+
+    if (state.candidatePageNo > this.expandedCandidatePageNo) {
+      this.expandedCandidatePageNo = state.candidatePageNo;
+    }
+    if (state.hasPreviousCandidatePage || state.candidatePageNo > 0 || this.expandedCandidatePageNo > 0) {
+      this.expandedCandidateCanPageBackward = true;
+      return;
+    }
+    this.expandedCandidateCanPageBackward = false;
+  }
+
+  private resolveExpandedCandidateInputSignature(state: KeyboardUiState): string {
+    return `${state.currentSubtypeId}|${state.keyboardLayout}|${state.pinyinInput}|${state.activeNineKeySpelling}|` +
+      `${state.nineKeySequence}`;
+  }
+
+  private resolveExpandedPinyinText(row: number): string {
+    if (this.uiState.nineKeySpellings.length > 0) {
+      if (row < this.uiState.nineKeySpellings.length) {
+        return formatDirectPinyinRawInput(this.uiState.nineKeySpellings[row]);
+      }
+      return '';
+    }
+    let text = this.resolveInlinePinyinText();
+    if (text.length === 0) {
+      return '';
+    }
+    let segments = text.split('\'');
+    if (row < segments.length) {
+      return segments[row];
+    }
+    return '';
+  }
+
+  private resolveExpandedCandidateText(displayIndex: number): string {
+    let candidate = this.resolveExpandedCandidateAt(displayIndex);
+    return candidate ? candidate.text : '';
+  }
+
+  private hasExpandedCandidateAt(displayIndex: number): boolean {
+    return this.resolveExpandedCandidateAt(displayIndex) !== undefined;
+  }
+
+  private resolveExpandedCandidateAt(displayIndex: number): CandidateItem | undefined {
+    let visibleIndex = 0;
+    for (let index = 0; index < this.uiState.candidates.length; index++) {
+      let candidate = this.uiState.candidates[index];
+      if (this.expandedCandidateSingleMode && !this.isSingleCandidateText(candidate.text)) {
+        continue;
+      }
+      if (visibleIndex === displayIndex) {
+        return candidate;
+      }
+      visibleIndex++;
+    }
+    return undefined;
+  }
+
+  private isSingleCandidateText(text: string): boolean {
+    return text.length <= 1;
+  }
+
+  private selectExpandedCandidate(displayIndex: number): void {
+    let candidate = this.resolveExpandedCandidateAt(displayIndex);
+    if (!candidate) {
+      return;
+    }
+    this.showExpandedCandidateBoard = false;
+    void imeRuntime.getSessionManager()?.selectCandidate(candidate.index);
   }
 
   private resolveLayoutIconLabel(): string {
@@ -3150,6 +4185,7 @@ struct KeyboardPanel {
 
   private shouldShowCandidateStrip(): boolean {
     return this.showSymbolPalette ||
+      this.uiState.pinyinInput.length > 0 ||
       this.uiState.preedit.length > 0 ||
       this.uiState.candidates.length > 0 ||
       this.uiState.activeNineKeySpelling.length > 0 ||

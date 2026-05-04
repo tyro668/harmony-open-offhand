@@ -383,6 +383,95 @@ offhand::rime::State StateForSessionOperation(const std::string &session_id,
     operation(api, parsed_session_id);
     return SnapshotStateUnlocked(parsed_session_id);
 }
+
+bool CandidatePageChanged(const offhand::rime::State &before, const offhand::rime::State &after)
+{
+    if (before.page_no != after.page_no) {
+        return true;
+    }
+    if (before.candidates.size() != after.candidates.size()) {
+        return true;
+    }
+    if (before.candidates.empty() || after.candidates.empty()) {
+        return false;
+    }
+    return before.candidates.front().text != after.candidates.front().text;
+}
+
+bool TryHighlightCandidatePageNo(RimeApi *api, RimeSessionId session_id, const offhand::rime::State &before,
+    int32_t target_page_no)
+{
+    if (api->highlight_candidate == nullptr || before.page_size <= 0 || target_page_no < 0) {
+        return false;
+    }
+
+    size_t target_index = static_cast<size_t>(target_page_no) * static_cast<size_t>(before.page_size);
+    return api->highlight_candidate(session_id, target_index) == True;
+}
+
+offhand::rime::State RebuildInputAtPage(RimeApi *api, RimeSessionId session_id, const std::string &raw_input,
+    int32_t target_page_no)
+{
+    if (raw_input.empty()) {
+        return SnapshotStateUnlocked(session_id);
+    }
+
+    api->clear_composition(session_id);
+    for (char ch : raw_input) {
+        api->process_key(session_id, static_cast<unsigned char>(ch), 0);
+    }
+
+    offhand::rime::State rebuilt = SnapshotStateUnlocked(session_id);
+    if (target_page_no > 0 && TryHighlightCandidatePageNo(api, session_id, rebuilt, target_page_no)) {
+        rebuilt = SnapshotStateUnlocked(session_id);
+    }
+    return rebuilt;
+}
+
+offhand::rime::State ChangePageWithFallback(const std::string &session_id, bool backward, int32_t target_page_no)
+{
+    std::lock_guard<std::mutex> lock(g_runtime.mutex);
+    RimeApi *api = GetApi();
+    if (api == nullptr) {
+        return EmptyStateForInvalidSession();
+    }
+    RimeSessionId parsed_session_id = 0;
+    if (!ParseSessionId(session_id, parsed_session_id) || !api->find_session(parsed_session_id)) {
+        return EmptyStateForInvalidSession();
+    }
+
+    offhand::rime::State before = SnapshotStateUnlocked(parsed_session_id);
+    int32_t resolved_target_page_no = target_page_no >= 0 ? target_page_no :
+        (backward ? before.page_no - 1 : before.page_no + 1);
+    if (TryHighlightCandidatePageNo(api, parsed_session_id, before, resolved_target_page_no)) {
+        offhand::rime::State after = SnapshotStateUnlocked(parsed_session_id);
+        if (CandidatePageChanged(before, after)) {
+            return after;
+        }
+    }
+
+    if (api->change_page != nullptr && api->change_page(parsed_session_id, backward ? True : False)) {
+        offhand::rime::State after = SnapshotStateUnlocked(parsed_session_id);
+        if (CandidatePageChanged(before, after)) {
+            return after;
+        }
+    }
+
+    api->process_key(parsed_session_id, backward ? XK_Page_Up : XK_Page_Down, 0);
+    offhand::rime::State after_key = SnapshotStateUnlocked(parsed_session_id);
+    if (CandidatePageChanged(before, after_key)) {
+        return after_key;
+    }
+
+    if (resolved_target_page_no >= 0) {
+        offhand::rime::State rebuilt = RebuildInputAtPage(api, parsed_session_id, before.raw_input,
+            resolved_target_page_no);
+        if (!rebuilt.candidates.empty()) {
+            return rebuilt;
+        }
+    }
+    return after_key;
+}
 } // namespace
 
 namespace offhand::rime {
@@ -618,18 +707,14 @@ State SetInput(const std::string &session_id, const std::string &input)
     });
 }
 
-State PageUp(const std::string &session_id)
+State PageUp(const std::string &session_id, int32_t target_page_no)
 {
-    return StateForSessionOperation(session_id, [](RimeApi *api, RimeSessionId parsed_session_id) {
-        api->process_key(parsed_session_id, XK_Page_Up, 0);
-    });
+    return ChangePageWithFallback(session_id, true, target_page_no);
 }
 
-State PageDown(const std::string &session_id)
+State PageDown(const std::string &session_id, int32_t target_page_no)
 {
-    return StateForSessionOperation(session_id, [](RimeApi *api, RimeSessionId parsed_session_id) {
-        api->process_key(parsed_session_id, XK_Page_Down, 0);
-    });
+    return ChangePageWithFallback(session_id, false, target_page_no);
 }
 
 std::string SyncUserData()

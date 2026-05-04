@@ -7,7 +7,7 @@
     "maxConcurrentSessions": 1
   },
   "input": {
-    "candidatePageSize": 8,
+    "candidatePageSize": 24,
     "maxCompositionLength": 64,
     "commitOnSpace": true,
     "enablePreviewText": false

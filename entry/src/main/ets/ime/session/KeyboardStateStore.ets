@@ -14,6 +14,7 @@ export interface KeyboardUiState {
   editorSummary: string;
   securitySummary: string;
   preedit: string;
+  pinyinInput: string;
   candidates: CandidateItem[];
   currentSubtypeId: string;
   currentSubtypeName: string;
@@ -54,6 +55,7 @@ const DEFAULT_STATE: KeyboardUiState = {
   editorSummary: 'Not attached to an editor',
   securitySummary: 'Capabilities unavailable',
   preedit: '',
+  pinyinInput: '',
   candidates: [],
   currentSubtypeId: '',
   currentSubtypeName: '',
@@ -75,7 +77,7 @@ const DEFAULT_STATE: KeyboardUiState = {
   hasNextCandidatePage: false,
   highlightedCandidateIndex: -1,
   voiceState: 'idle',
-  voiceStatusText: 'Voice idle',
+  voiceStatusText: '',
   voiceTranscriptPreview: '',
   voiceDraftText: '',
   canPolish: false,
@@ -123,6 +125,9 @@ class KeyboardStateStore {
     }
     if (nextState.preedit !== undefined) {
       updatedState.preedit = nextState.preedit;
+    }
+    if (nextState.pinyinInput !== undefined) {
+      updatedState.pinyinInput = nextState.pinyinInput;
     }
     if (nextState.candidates !== undefined) {
       updatedState.candidates = cloneCandidates(nextState.candidates);
@@ -216,9 +221,10 @@ class KeyboardStateStore {
   }
 
   setCandidates(preedit: string, candidates: CandidateItem[], pageNo: number, pageSize: number,
-    hasPreviousPage: boolean, hasNextPage: boolean, highlightedCandidateIndex: number): void {
+    hasPreviousPage: boolean, hasNextPage: boolean, highlightedCandidateIndex: number, pinyinInput: string = ''): void {
     let updatedState = cloneKeyboardUiState(this.state);
     updatedState.preedit = preedit;
+    updatedState.pinyinInput = pinyinInput;
     updatedState.candidates = cloneCandidates(candidates);
     updatedState.candidatePageNo = pageNo;
     updatedState.candidatePageSize = pageSize;
@@ -257,6 +263,7 @@ class KeyboardStateStore {
     updatedState.editorSummary = DEFAULT_STATE.editorSummary;
     updatedState.securitySummary = DEFAULT_STATE.securitySummary;
     updatedState.preedit = '';
+    updatedState.pinyinInput = '';
     updatedState.candidates = [];
     updatedState.punctuationMode = DEFAULT_STATE.punctuationMode;
     updatedState.nineKeySequence = '';
@@ -302,6 +309,7 @@ function cloneKeyboardUiState(source: KeyboardUiState): KeyboardUiState {
     editorSummary: source.editorSummary,
     securitySummary: source.securitySummary,
     preedit: source.preedit,
+    pinyinInput: source.pinyinInput,
     candidates: cloneCandidates(source.candidates),
     currentSubtypeId: source.currentSubtypeId,
     currentSubtypeName: source.currentSubtypeName,

@@ -224,6 +224,10 @@ export class SessionManager {
       hilog.warn(DOMAIN, TAG, '%{public}s: no extension context', reason);
       return;
     }
+    let autoVoicePolishEnabled = settings.enableCloudPolish && settings.autoPolishVoiceResult;
+    settings.enableVoice = true;
+    settings.enableCloudPolish = autoVoicePolishEnabled;
+    settings.autoPolishVoiceResult = autoVoicePolishEnabled;
     await this.configRepository.saveRuntimeSettings(this.context, settings);
     hilog.info(DOMAIN, TAG,
       '%{public}s saved: voice=%{public}s polish=%{public}s autoPolish=%{public}s mode=%{public}s provider=%{public}s preset=%{public}s apiKeyLen=%{public}d',
@@ -559,6 +563,7 @@ export class SessionManager {
     keyboardStateStore.patch({
       statusText: 'Deleted backward',
       preedit: '',
+      pinyinInput: '',
       voiceTranscriptPreview: ''
     });
   }
@@ -598,6 +603,7 @@ export class SessionManager {
     keyboardStateStore.patch({
       statusText: 'Editor cleared',
       preedit: '',
+      pinyinInput: '',
       voiceDraftText: '',
       voiceTranscriptPreview: ''
     });
@@ -663,7 +669,14 @@ export class SessionManager {
     if (this.rimeSessionId.length === 0) {
       return;
     }
-    let state = this.rimeService.pageUp(this.rimeSessionId);
+    let currentPageNo = keyboardStateStore.getSnapshot().candidatePageNo;
+    let fallbackPageNo = Math.max(0, currentPageNo - 1);
+    keyboardStateStore.patch({
+      candidatePageNo: fallbackPageNo,
+      hasPreviousCandidatePage: fallbackPageNo > 0
+    });
+    let state = this.rimeService.pageUp(this.rimeSessionId, fallbackPageNo);
+    this.applyCandidatePageNoFallback(state, fallbackPageNo);
     await this.applyRimeState(state);
   }
 
@@ -675,7 +688,14 @@ export class SessionManager {
     if (this.rimeSessionId.length === 0) {
       return;
     }
-    let state = this.rimeService.pageDown(this.rimeSessionId);
+    let currentPageNo = keyboardStateStore.getSnapshot().candidatePageNo;
+    let fallbackPageNo = currentPageNo + 1;
+    keyboardStateStore.patch({
+      candidatePageNo: fallbackPageNo,
+      hasPreviousCandidatePage: true
+    });
+    let state = this.rimeService.pageDown(this.rimeSessionId, fallbackPageNo);
+    this.applyCandidatePageNoFallback(state, fallbackPageNo);
     await this.applyRimeState(state);
   }
 
@@ -684,7 +704,7 @@ export class SessionManager {
       this.pendingVoiceStartRequested = false;
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: 'Voice input unavailable: no active subtype',
+        voiceStatusText: 'voice.unavailable',
         statusText: 'Voice disabled: no subtype'
       });
       return;
@@ -696,7 +716,7 @@ export class SessionManager {
       if (this.editorAdapter) {
         keyboardStateStore.patch({
           voiceState: 'starting',
-          voiceStatusText: 'Preparing voice session...',
+          voiceStatusText: 'voice.preparing',
           statusText: 'Refreshing session for voice input'
         });
         await this.refreshSessionContext('voiceStart');
@@ -706,9 +726,7 @@ export class SessionManager {
       this.pendingVoiceStartRequested = true;
       keyboardStateStore.patch({
         voiceState: 'idle',
-        voiceStatusText: this.inputClient ?
-          'Waiting for session refresh to complete...' :
-          'Waiting for active input session...',
+        voiceStatusText: 'voice.preparing',
         statusText: this.inputClient ?
           'Voice start queued until session refresh completes' :
           'Voice start queued until inputStart arrives'
@@ -724,7 +742,7 @@ export class SessionManager {
           'voice disabled by policy or settings';
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: `Voice input unavailable: ${reason}`,
+        voiceStatusText: 'voice.unavailable',
         statusText: `Voice disabled: ${reason}`
       });
       return;
@@ -732,7 +750,7 @@ export class SessionManager {
     if (!this.context) {
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: 'Voice permission context unavailable'
+        voiceStatusText: 'voice.unavailable'
       });
       return;
     }
@@ -743,7 +761,7 @@ export class SessionManager {
     // 立即显示录音开始状态，让用户感知到点击已被响应
     keyboardStateStore.patch({
       voiceState: 'starting',
-      voiceStatusText: 'Starting...',
+      voiceStatusText: 'voice.starting',
       statusText: 'Voice capture starting'
     });
     let voiceConfig = this.configRepository.getConfig().voice;
@@ -751,7 +769,7 @@ export class SessionManager {
     if (!permissionGranted) {
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: 'Microphone permission denied',
+        voiceStatusText: 'voice.permission_denied',
         statusText: 'Voice permission denied'
       });
       void ImeTelemetry.trackBehavior('voice_permission_denied');
@@ -763,14 +781,14 @@ export class SessionManager {
       this.voiceCaptureService.setTranscriptListener((text: string): void => {
         keyboardStateStore.patch({
           voiceTranscriptPreview: text,
-          voiceStatusText: text.length > 0 ? text : 'Listening...'
+          voiceStatusText: text.length > 0 ? text : 'voice.listening'
         });
       });
       await this.voiceCaptureService.start(voiceConfig, this.currentSubtype.locale);
       this.startVoiceAutoStopTimer(voiceConfig.maxRecordSeconds);
       keyboardStateStore.patch({
         voiceState: 'recording',
-        voiceStatusText: 'Listening...',
+        voiceStatusText: 'voice.listening',
         statusText: 'Voice capture started'
       });
       void ImeTelemetry.trackBehavior('voice_start', `subtypeId=${this.currentSubtype.id}`);
@@ -779,7 +797,7 @@ export class SessionManager {
       hilog.error(DOMAIN, TAG, 'Failed to start voice capture: %{public}s', errorMsg);
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: `Voice capture failed: ${errorMsg}`,
+        voiceStatusText: 'voice.failed',
         statusText: 'Voice capture unavailable'
       });
     }
@@ -794,7 +812,7 @@ export class SessionManager {
     let durationMs = this.voiceCaptureService.getRecordingDurationMs();
     keyboardStateStore.patch({
       voiceState: 'processing',
-      voiceStatusText: discardResult ? 'Stopping voice capture...' : 'Transcribing voice input...',
+      voiceStatusText: discardResult ? 'voice.stopping' : 'voice.processing',
       statusText: 'Voice processing'
     });
     try {
@@ -809,7 +827,7 @@ export class SessionManager {
         // 空识别结果是正常情况（如无声/噪音），不应标记为 error 导致红色按钮
         keyboardStateStore.patch({
           voiceState: 'idle',
-          voiceStatusText: '未检测到语音',
+          voiceStatusText: 'voice.no_speech',
           voiceTranscriptPreview: '',
           voiceDraftText: ''
         });
@@ -867,7 +885,7 @@ export class SessionManager {
       if (polishGateAutoPolishResult && polishGateCapability && polishGateAutoPolishVoice) {
         keyboardStateStore.patch({
           isPolishRunning: true,
-          voiceStatusText: 'Polishing transcript...',
+          voiceStatusText: 'voice.polishing',
           statusText: 'LLM polishing voice transcript'
         });
 
@@ -1007,7 +1025,7 @@ export class SessionManager {
       });
       keyboardStateStore.patch({
         voiceState: 'idle',
-        voiceStatusText: `Voice ready (${statusSource})`,
+        voiceStatusText: '',
         statusText: hasPendingVoiceDraft ?
           (this.pendingPolishSuggestion ?
             `Voice draft ready with suggestion (${statusSource})` :
@@ -1025,7 +1043,7 @@ export class SessionManager {
       hilog.error(DOMAIN, TAG, 'Failed to stop voice capture: %{public}s', errorMsg);
       keyboardStateStore.patch({
         voiceState: 'error',
-        voiceStatusText: `Voice recognition failed: ${errorMsg}`,
+        voiceStatusText: 'voice.failed',
         statusText: 'Voice recognition failed',
         isPolishRunning: false
       });
@@ -1208,7 +1226,7 @@ export class SessionManager {
     keyboardStateStore.patch({
       statusText: 'Voice draft inserted',
       voiceState: 'idle',
-      voiceStatusText: 'Voice idle'
+      voiceStatusText: ''
     });
   }
 
@@ -1321,7 +1339,7 @@ export class SessionManager {
       voiceEnabled: this.activeCapabilities.voiceEnabled,
       polishEnabled: this.activeCapabilities.polishEnabled,
       voiceState: 'idle',
-      voiceStatusText: this.activeCapabilities.voiceEnabled ? 'Voice idle' : 'Voice unavailable',
+      voiceStatusText: this.activeCapabilities.voiceEnabled ? '' : 'voice.unavailable',
       voiceDraftText: this.pendingVoiceDraftText
     });
     this.updatePolishAvailability();
@@ -1531,8 +1549,16 @@ export class SessionManager {
       state.pageSize,
       state.pageNo > 0,
       !state.isLastPage,
-      state.highlightedCandidateIndex
+      state.highlightedCandidateIndex,
+      state.rawInput
     );
+  }
+
+  private applyCandidatePageNoFallback(state: RimeState, pageNo: number): void {
+    if (state.candidates.length === 0) {
+      return;
+    }
+    state.pageNo = Math.max(0, pageNo);
   }
 
   private updateEnglishCandidateState(state?: EnglishEngineState): void {
@@ -1959,7 +1985,7 @@ export class SessionManager {
     this.voiceCaptureService.setTranscriptListener(undefined);
     keyboardStateStore.patch({
       voiceState: 'idle',
-      voiceStatusText: 'Voice idle',
+      voiceStatusText: '',
       voiceTranscriptPreview: '',
       voiceDraftText: '',
       isPolishRunning: false

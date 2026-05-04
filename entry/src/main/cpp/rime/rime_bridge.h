@@ -43,8 +43,8 @@ State SetOption(const std::string &session_id, const std::string &option_name, b
 State ClearComposition(const std::string &session_id);
 State CommitComposition(const std::string &session_id);
 State SetInput(const std::string &session_id, const std::string &input);
-State PageUp(const std::string &session_id);
-State PageDown(const std::string &session_id);
+State PageUp(const std::string &session_id, int32_t target_page_no);
+State PageDown(const std::string &session_id, int32_t target_page_no);
 std::string SyncUserData();
 
 std::string StringifyStatus(bool ok, const std::string &message);
@@ -58,8 +58,8 @@ std::string SetOptionJson(const std::string &session_id, const std::string &opti
 std::string ClearCompositionJson(const std::string &session_id);
 std::string CommitCompositionJson(const std::string &session_id);
 std::string SetInputJson(const std::string &session_id, const std::string &input);
-std::string PageUpJson(const std::string &session_id);
-std::string PageDownJson(const std::string &session_id);
+std::string PageUpJson(const std::string &session_id, int32_t target_page_no);
+std::string PageDownJson(const std::string &session_id, int32_t target_page_no);
 } // namespace offhand::rime
 
 #endif

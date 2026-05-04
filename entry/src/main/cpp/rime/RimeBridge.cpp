@@ -41,13 +41,13 @@ std::string SetInputJson(const std::string &session_id, const std::string &input
     return StringifyState(SetInput(session_id, input));
 }
 
-std::string PageUpJson(const std::string &session_id)
+std::string PageUpJson(const std::string &session_id, int32_t target_page_no)
 {
-    return StringifyState(PageUp(session_id));
+    return StringifyState(PageUp(session_id, target_page_no));
 }
 
-std::string PageDownJson(const std::string &session_id)
+std::string PageDownJson(const std::string &session_id, int32_t target_page_no)
 {
-    return StringifyState(PageDown(session_id));
+    return StringifyState(PageDown(session_id, target_page_no));
 }
 } // namespace offhand::rime

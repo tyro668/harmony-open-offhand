@@ -198,7 +198,7 @@ export class ConfigRepository {
   }
 
   async refreshRuntimeSettings(context: common.Context): Promise<void> {
-    this.runtimeSettings = await this.settingsStore.load(context);
+    this.runtimeSettings = cloneRuntimeSettings(await this.settingsStore.load(context));
     this.config = applyRuntimeSettings(this.baseConfig, this.runtimeSettings);
   }
 
@@ -207,8 +207,9 @@ export class ConfigRepository {
   // in-keyboard LLM settings panel so settings edited inside the IME
   // extension sandbox persist and take effect without a second load pass.
   async saveRuntimeSettings(context: common.Context, settings: OffhandRuntimeSettings): Promise<void> {
-    await this.settingsStore.save(context, settings);
-    this.runtimeSettings = settings;
+    let normalized = cloneRuntimeSettings(settings);
+    await this.settingsStore.save(context, normalized);
+    this.runtimeSettings = normalized;
     this.config = applyRuntimeSettings(this.baseConfig, this.runtimeSettings);
   }
 
@@ -243,7 +244,7 @@ function createDefaultConfig(): OffhandImeConfig {
     maxConcurrentSessions: 1
   };
   let inputConfig: OffhandInputConfig = {
-    candidatePageSize: 8,
+    candidatePageSize: 24,
     maxCompositionLength: 64,
     commitOnSpace: true,
     enablePreviewText: false
@@ -309,18 +310,16 @@ function createDefaultConfig(): OffhandImeConfig {
 function applyRuntimeSettings(base: OffhandImeConfig, runtime: OffhandRuntimeSettings): OffhandImeConfig {
   let merged = cloneConfig(base);
   let selection = resolveBuiltinModelSelection(runtime.llmProviderId, runtime.llmPresetId);
+  let autoVoicePolishEnabled = runtime.enableCloudPolish && runtime.autoPolishVoiceResult;
   merged.input.enablePreviewText = runtime.enablePreviewText;
-  merged.voice.enabled = runtime.enableVoice;
+  merged.voice.enabled = true;
   merged.voice.autoInsertResult = runtime.autoInsertVoiceResult;
-  merged.voice.autoPolishResult = runtime.autoPolishVoiceResult;
+  merged.voice.autoPolishResult = autoVoicePolishEnabled;
   merged.voice.asrEndpoint = runtime.asrEndpoint;
-  // When the user disables the system built-in ASR, force the end-side
-  // SenseVoice provider so VoiceCaptureService never attempts CoreSpeechKit
-  // initialization and never falls back to it at runtime.
-  if (!runtime.enableBuiltinAsr) {
-    merged.voice.asrProvider = 'sensevoice_local';
-  }
-  merged.llmPolish.enabled = runtime.enableCloudPolish;
+  // The settings switch is explicit: enabled means system built-in ASR,
+  // disabled means the bundled endpoint-side SenseVoice provider.
+  merged.voice.asrProvider = runtime.enableBuiltinAsr ? 'builtin' : 'sensevoice_local';
+  merged.llmPolish.enabled = autoVoicePolishEnabled;
   merged.llmPolish.providerId = selection.provider.providerId;
   merged.llmPolish.providerName = selection.provider.providerName;
   merged.llmPolish.modelPresetId = selection.preset.presetId;
@@ -329,7 +328,7 @@ function applyRuntimeSettings(base: OffhandImeConfig, runtime: OffhandRuntimeSet
   merged.llmPolish.protocol = selection.preset.protocol;
   merged.llmPolish.endpoint = selection.preset.endpoint;
   merged.llmPolish.apiKey = runtime.llmApiKey.trim();
-  merged.llmPolish.autoPolishVoiceResult = runtime.autoPolishVoiceResult;
+  merged.llmPolish.autoPolishVoiceResult = autoVoicePolishEnabled;
   merged.llmPolish.style = runtime.llmStyle;
   merged.privacy.enablePersonalization = runtime.enablePersonalization;
   return merged;
@@ -750,7 +749,7 @@ function removeRecursively(path: string): void {
 }
 
 function buildRimeResourceSignature(config: OffhandImeConfig): string {
-  let pageSize = Math.max(3, Math.min(12, config.input.candidatePageSize));
+  let pageSize = Math.max(3, Math.min(24, config.input.candidatePageSize));
   let fuzzyState = config.pinyin.enableFuzzy ? '1' : '0';
   let predictionState = config.pinyin.enablePrediction ? '1' : '0';
   let fuzzyPairs = config.pinyin.fuzzyPairs.map((pair: string[]): string => pair.join('>')).join('|');
@@ -763,7 +762,7 @@ function writeUtf8ResourceFile(path: string, content: string): void {
 
 function buildRimeCustomPatch(config: OffhandImeConfig): string {
   let lines: string[] = [];
-  let pageSize = Math.max(3, Math.min(12, config.input.candidatePageSize));
+  let pageSize = Math.max(3, Math.min(24, config.input.candidatePageSize));
   lines.push('patch:');
   lines.push(`  menu/page_size: ${pageSize}`);
   lines.push(`  translator/enable_sentence: ${config.pinyin.enablePrediction ? 'true' : 'false'}`);

@@ -1,5 +1,9 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { appendDirectPinyinRawInput, backspaceDirectPinyinRawInput } from '../main/ets/ime/session/DirectPinyinInput';
+import {
+  appendDirectPinyinRawInput,
+  backspaceDirectPinyinRawInput,
+  formatDirectPinyinRawInput
+} from '../main/ets/ime/session/DirectPinyinInput';
 
 export default function directPinyinInputTest() {
   describe('DirectPinyinInput', () => {
@@ -23,6 +27,15 @@ export default function directPinyinInputTest() {
       expect(backspaceDirectPinyinRawInput('nihao')).assertEqual('niha');
       expect(backspaceDirectPinyinRawInput('n')).assertEqual('');
       expect(backspaceDirectPinyinRawInput('')).assertEqual('');
+    });
+
+    it('formatRawPinyinWithSyllableSeparators', 0, () => {
+      expect(formatDirectPinyinRawInput('guojia')).assertEqual('guo\'jia');
+      expect(formatDirectPinyinRawInput('xian')).assertEqual('xian');
+      expect(formatDirectPinyinRawInput('shanghai')).assertEqual('shang\'hai');
+      expect(formatDirectPinyinRawInput('guoj')).assertEqual('guo\'j');
+      expect(formatDirectPinyinRawInput('NIHAO')).assertEqual('ni\'hao');
+      expect(formatDirectPinyinRawInput('xi\'an')).assertEqual('xi\'an');
     });
   });
 }

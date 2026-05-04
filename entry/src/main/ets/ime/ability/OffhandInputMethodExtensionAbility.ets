@@ -9,6 +9,11 @@ import { SessionManager } from '../session/SessionManager';
 
 const DOMAIN = 0xFF10;
 const TAG = 'OffhandIME';
+const KEYBOARD_PANEL_CONTENT_HEIGHT: number = 270;
+const KEYBOARD_PANEL_VERTICAL_PADDING: number = 16;
+const KEYBOARD_PANEL_MIN_HEIGHT: number = KEYBOARD_PANEL_CONTENT_HEIGHT + KEYBOARD_PANEL_VERTICAL_PADDING;
+const KEYBOARD_PANEL_REFERENCE_WIDTH: number = 1080;
+const KEYBOARD_PANEL_REFERENCE_HEIGHT: number = 816;
 
 interface PanelWithAdjustRect {
   adjustPanelRect?: (flag: inputMethodEngine.PanelFlag, rect: inputMethodEngine.PanelRect) => Promise<void>;
@@ -30,6 +35,7 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   private readonly rimeService = new RimeService();
   private readonly sessionManager = new SessionManager(this.configRepository, this.rimeService);
   private keyboardPanel?: inputMethodEngine.Panel;
+  private keyboardPanelPromise?: Promise<void>;
   private bootstrapPromise?: Promise<void>;
   private displayChangeRegistered: boolean = false;
   private eventsRegistered: boolean = false;
@@ -53,7 +59,9 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   private readonly onKeyboardShow = (): void => {
     hilog.info(DOMAIN, TAG, 'keyboardShow received');
     void this.runTask('keyboardShow', async (): Promise<void> => {
+      await this.ensureKeyboardPanel();
       await this.awaitBootstrap();
+      await this.ensureKeyboardPanel();
       await this.sessionManager.handleKeyboardShow();
     });
   };
@@ -95,7 +103,12 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   }
 
   private async bootstrap(): Promise<void> {
-    await this.sessionManager.initialize(this.context);
+    await this.ensureKeyboardPanel();
+    try {
+      await this.sessionManager.initialize(this.context);
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Failed to initialize IME session: %{public}s', JSON.stringify(error));
+    }
     await this.ensureKeyboardPanel();
     try {
       await this.sessionManager.handleSecurityModeChange(this.requireInputMethodAbility().getSecurityMode());
@@ -108,6 +121,19 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
     if (this.keyboardPanel) {
       return;
     }
+    if (this.keyboardPanelPromise) {
+      await this.keyboardPanelPromise;
+      return;
+    }
+    this.keyboardPanelPromise = this.createKeyboardPanel();
+    try {
+      await this.keyboardPanelPromise;
+    } finally {
+      this.keyboardPanelPromise = undefined;
+    }
+  }
+
+  private async createKeyboardPanel(): Promise<void> {
     try {
       let inputMethodAbility = this.requireInputMethodAbility();
       // SOFT_KEYBOARD + FLG_FIXED: the system docks this panel to the bottom of the
@@ -124,6 +150,7 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
       this.sessionManager.bindPanel(keyboardPanel);
       this.registerDisplayChangeListener();
     } catch (error) {
+      this.keyboardPanel = undefined;
       hilog.error(DOMAIN, TAG, 'Failed to create keyboard panel: %{public}s', JSON.stringify(error));
     }
   }
@@ -171,16 +198,14 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
       // matching orientation so the avoid area calculation covers the full
       // bottom strip; otherwise the focused editor is not lifted properly.
       let width = landscape ? longSide : shortSide;
-      let baseHeight = landscape ? shortSide : longSide;
-      // Portrait keyboards occupy ~30% of the long side, landscape keyboards
-      // ~40% of the short side. Tuned to match the actual rendered keyboard
-      // content so the panel bottom aligns with the screen bottom without
-      // leaving an empty gap below the keys.
-      let ratio = landscape ? 0.40 : 0.30;
-      let estimatedHeight = Math.round(baseHeight * ratio);
-      let minHeight = Math.round(shortSide * 0.26);
+      // The portrait keyboard artwork is designed from the 1080x816 reference
+      // screenshots, so portrait height scales from the screen width. Landscape
+      // keeps the shorter-side ratio to avoid occupying too much vertical room.
+      let estimatedHeight = landscape ? Math.round(shortSide * 0.40) :
+        Math.round(shortSide * KEYBOARD_PANEL_REFERENCE_HEIGHT / KEYBOARD_PANEL_REFERENCE_WIDTH);
+      let minHeight = Math.max(KEYBOARD_PANEL_MIN_HEIGHT, Math.round(shortSide * 0.26));
       let maxHeight = Math.round(longSide * 0.42);
-      let height = Math.max(minHeight, Math.min(estimatedHeight, maxHeight));
+      let height = Math.max(minHeight, Math.min(estimatedHeight, Math.max(minHeight, maxHeight)));
       return new KeyboardPanelSize(width, height);
     } catch (_) {
       return landscape ? new KeyboardPanelSize(1920, 520) : new KeyboardPanelSize(1080, 820);
