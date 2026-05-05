@@ -1,6 +1,7 @@
 import { RemoteHttpClient } from '../network/RemoteHttpClient';
 import { OffhandLlmPolishConfig } from '../common/ImeTypes';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { normalizeVoicePolishPromptTemplate } from './DefaultPolishPrompt';
 
 const DOMAIN = 0xFF10;
 const TAG = 'LlmPolishService';
@@ -256,7 +257,7 @@ function parseStreamLineDelta(line: string, protocol: string): string {
 
 function buildOpenAiCompatiblePayload(config: OffhandLlmPolishConfig, request: LlmPolishRequest,
   stream: boolean = false): OpenAiCompatibleRequest {
-  let systemPrompt = buildSystemPrompt(request.style);
+  let systemPrompt = buildSystemPrompt(config.promptTemplate);
   let userPrompt = buildUserPrompt(request);
   let payload: OpenAiCompatibleRequest = {
     model: config.apiModel,
@@ -282,7 +283,7 @@ function buildAnthropicCompatiblePayload(config: OffhandLlmPolishConfig, request
   stream: boolean = false): AnthropicCompatibleRequest {
   let payload: AnthropicCompatibleRequest = {
     model: config.apiModel,
-    system: buildSystemPrompt(request.style),
+    system: buildSystemPrompt(config.promptTemplate),
     max_tokens: 1024,
     temperature: 0.2,
     messages: [
@@ -303,55 +304,12 @@ function buildAnthropicCompatiblePayload(config: OffhandLlmPolishConfig, request
   return payload;
 }
 
-function buildSystemPrompt(style: string): string {
-  // Keep in sync with design/config/default-prompt.md.
-  let normalizedStyle = normalizeStyleLabel(style);
-  return [
-    '# 文本无损优化提示词',
-    '',
-    '## 角色设定',
-    '你是一个克制、可靠的文本编辑助手，负责清理口语化文本并提升可读性。',
-    '',
-    '## 核心任务',
-    '对提供的**已成文文本**进行“无损润色”。去除口语杂质与冗余，但严格保留原意、关键信息和语气。',
-    '',
-    '## 处理规则',
-    '1. **清理口语碎词：** 删除无意义语气词（如“呃、那个、然后、就是说、啊、嗯”）。',
-    '2. **消除重复：** 合并重复词句，保留一次即可。',
-    '3. **微调语法：** 修正明显病句、搭配错误与语序问题，使表达通顺。',
-    '4. **严格保真：**',
-    '   - 禁止新增原文没有的信息、观点或结论。',
-    '   - 禁止过度改写成公文腔或 AI 腔。',
-    '   - 保留专有名词、术语、数字、单位、时间与人名。',
-    '5. **标点与分段：** 补全标点并按语义合理分段。',
-    '6. **语言规范：** 统一使用简体中文输出。',
-    '',
-    `## 当前风格\n${normalizedStyle}`,
-    '',
-    '## 输出格式',
-    '仅输出优化后的正文，不要输出解释、标题、前后缀或额外说明。'
-  ].join('\n');
+function buildSystemPrompt(promptTemplate: string): string {
+  return normalizeVoicePolishPromptTemplate(promptTemplate);
 }
 
 function buildUserPrompt(request: LlmPolishRequest): string {
   return request.text.trim();
-}
-
-function normalizeStyleLabel(style: string): string {
-  let normalized = style.trim().toLowerCase();
-  if (normalized === 'formal') {
-    return 'formal';
-  }
-  if (normalized === 'clear') {
-    return 'clear';
-  }
-  if (normalized === 'friendly') {
-    return 'friendly';
-  }
-  if (normalized === 'light') {
-    return 'light';
-  }
-  return 'clean_conversational';
 }
 
 function resolveOpenAiCompatibleEndpoint(endpoint: string): string {

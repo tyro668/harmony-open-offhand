@@ -3,14 +3,23 @@ import { preferences } from '@kit.ArkData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import contextConstant from '@ohos.app.ability.contextConstant';
 import fileIo from '@ohos.file.fs';
-import { KeyboardLayoutId, LetterCaseMode, OffhandRuntimeSettings } from '../ime/common/ImeTypes';
+import {
+  KeyboardLayoutId,
+  LetterCaseMode,
+  OffhandRuntimeSettings
+} from '../ime/common/ImeTypes';
 import { getDefaultBuiltinModelSelection, resolveBuiltinModelSelection } from '../ime/config/BuiltinModels';
+import {
+  DEFAULT_VOICE_POLISH_PROMPT,
+  normalizeVoicePolishPromptMode,
+  normalizeVoicePolishPromptTemplate
+} from '../ime/llm/DefaultPolishPrompt';
 
 const PREF_NAME = 'offhand_runtime_settings';
 const SETTINGS_KEY = 'runtime_settings_json';
 const LOG_DOMAIN = 0xFF10;
 const LOG_TAG = 'OffhandSettingsStore';
-const PERSISTED_SETTINGS_VERSION = 3;
+const PERSISTED_SETTINGS_VERSION = 5;
 const PREF_MODULE_NAME = 'entry';
 const SETTINGS_FILE_DIR = 'settings';
 const SETTINGS_FILE_NAME = 'offhand-runtime-settings.json';
@@ -442,6 +451,8 @@ export function createDefaultRuntimeSettings(): OffhandRuntimeSettings {
     llmPresetId: defaultSelection.preset.presetId,
     llmApiKey: '',
     llmStyle: 'clean_conversational',
+    llmPromptTemplateMode: 'default',
+    llmPromptTemplate: DEFAULT_VOICE_POLISH_PROMPT,
     defaultEntryMode: 'keyboard',
     defaultSubtypeId: 'zh-Hans-pinyin',
     defaultKeyboardLayout: 'qwerty_26',
@@ -466,6 +477,8 @@ export function cloneRuntimeSettings(source: OffhandRuntimeSettings): OffhandRun
     llmPresetId: selection.preset.presetId,
     llmApiKey: typeof source.llmApiKey === 'string' ? source.llmApiKey.trim() : '',
     llmStyle: source.llmStyle,
+    llmPromptTemplateMode: normalizeVoicePolishPromptMode(source.llmPromptTemplateMode, source.llmPromptTemplate),
+    llmPromptTemplate: normalizeVoicePolishPromptTemplate(source.llmPromptTemplate),
     defaultEntryMode: entryMode,
     defaultSubtypeId: normalizeDefaultSubtypeId(source.defaultSubtypeId, entryMode),
     defaultKeyboardLayout: normalizeDefaultKeyboardLayout(source.defaultKeyboardLayout, entryMode),
@@ -574,6 +587,8 @@ function normalizeRuntimeSettings(raw: string): OffhandRuntimeSettings {
       llmApiKey: typeof parsed.llmApiKey === 'string' ? parsed.llmApiKey.trim() : defaults.llmApiKey,
       llmStyle: typeof parsed.llmStyle === 'string' && parsed.llmStyle.trim().length > 0 ?
         parsed.llmStyle.trim() : defaults.llmStyle,
+      llmPromptTemplateMode: normalizeVoicePolishPromptMode(parsed.llmPromptTemplateMode, parsed.llmPromptTemplate),
+      llmPromptTemplate: normalizeVoicePolishPromptTemplate(parsed.llmPromptTemplate),
       defaultEntryMode: entryMode,
       defaultSubtypeId: normalizeDefaultSubtypeId(parsed.defaultSubtypeId, entryMode),
       defaultKeyboardLayout: normalizeDefaultKeyboardLayout(parsed.defaultKeyboardLayout, entryMode),

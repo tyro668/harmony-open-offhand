@@ -129,6 +129,14 @@
       "value": "模型提供商"
     },
     {
+      "name": "ime_model_settings_title",
+      "value": "模型配置"
+    },
+    {
+      "name": "ime_model_settings_hint",
+      "value": "配置模型提供商、模型和 API Key"
+    },
+    {
       "name": "ime_current_model",
       "value": "当前模型"
     },
@@ -181,6 +189,38 @@
       "value": "润色建议"
     },
     {
+      "name": "ime_polish_prompt_title",
+      "value": "润色模板"
+    },
+    {
+      "name": "ime_polish_prompt_hint",
+      "value": "可选择内置默认模板，或编辑自定义模板。"
+    },
+    {
+      "name": "ime_polish_prompt_default_mode",
+      "value": "默认版"
+    },
+    {
+      "name": "ime_polish_prompt_custom_mode",
+      "value": "自定义版"
+    },
+    {
+      "name": "ime_polish_prompt_default_summary",
+      "value": "使用默认模板"
+    },
+    {
+      "name": "ime_polish_prompt_custom_summary",
+      "value": "已自定义模板"
+    },
+    {
+      "name": "ime_polish_prompt_placeholder",
+      "value": "请输入润色提示词"
+    },
+    {
+      "name": "ime_action_reset_default",
+      "value": "恢复默认"
+    },
+    {
       "name": "ime_polish_applied",
       "value": "已应用润色结果。"
     },
@@ -202,7 +242,7 @@
     },
     {
       "name": "ime_voice_status_processing",
-      "value": "正在识别语音..."
+      "value": "正在将语音转换为文字"
     },
     {
       "name": "ime_voice_status_preparing",
@@ -213,8 +253,12 @@
       "value": "正在停止语音输入..."
     },
     {
+      "name": "ime_voice_status_stopped",
+      "value": "录入完成"
+    },
+    {
       "name": "ime_voice_status_polishing",
-      "value": "正在润色识别文本..."
+      "value": "正在对文字进行润色"
     },
     {
       "name": "ime_voice_status_failed",

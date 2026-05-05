@@ -129,6 +129,14 @@
       "value": "Model provider"
     },
     {
+      "name": "ime_model_settings_title",
+      "value": "Model settings"
+    },
+    {
+      "name": "ime_model_settings_hint",
+      "value": "Configure provider, model, and API key"
+    },
+    {
       "name": "ime_current_model",
       "value": "Current model"
     },
@@ -181,6 +189,38 @@
       "value": "Polish suggestion"
     },
     {
+      "name": "ime_polish_prompt_title",
+      "value": "Polish template"
+    },
+    {
+      "name": "ime_polish_prompt_hint",
+      "value": "Choose the built-in default template or edit a custom template."
+    },
+    {
+      "name": "ime_polish_prompt_default_mode",
+      "value": "Default"
+    },
+    {
+      "name": "ime_polish_prompt_custom_mode",
+      "value": "Custom"
+    },
+    {
+      "name": "ime_polish_prompt_default_summary",
+      "value": "Default template"
+    },
+    {
+      "name": "ime_polish_prompt_custom_summary",
+      "value": "Custom template"
+    },
+    {
+      "name": "ime_polish_prompt_placeholder",
+      "value": "Enter polish prompt"
+    },
+    {
+      "name": "ime_action_reset_default",
+      "value": "Default"
+    },
+    {
       "name": "ime_polish_applied",
       "value": "Polished text applied."
     },
@@ -202,7 +242,7 @@
     },
     {
       "name": "ime_voice_status_processing",
-      "value": "Transcribing voice input..."
+      "value": "Converting speech to text"
     },
     {
       "name": "ime_voice_status_preparing",
@@ -213,8 +253,12 @@
       "value": "Stopping voice input..."
     },
     {
+      "name": "ime_voice_status_stopped",
+      "value": "Voice input stopped"
+    },
+    {
       "name": "ime_voice_status_polishing",
-      "value": "Polishing transcript..."
+      "value": "Polishing text"
     },
     {
       "name": "ime_voice_status_failed",

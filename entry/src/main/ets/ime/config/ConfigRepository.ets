@@ -22,6 +22,11 @@ import {
 } from '../common/ImeTypes';
 import { getDefaultBuiltinModelSelection, resolveBuiltinModelSelection } from './BuiltinModels';
 import { cloneRuntimeSettings, createDefaultRuntimeSettings, OffhandSettingsStore } from '../../settings/OffhandSettingsStore';
+import {
+  DEFAULT_VOICE_POLISH_PROMPT,
+  normalizeVoicePolishPromptTemplate,
+  resolveVoicePolishPromptTemplate
+} from '../llm/DefaultPolishPrompt';
 
 interface SubtypeEnvelope {
   subtypes: OffhandSubtypeConfig[];
@@ -330,6 +335,8 @@ function applyRuntimeSettings(base: OffhandImeConfig, runtime: OffhandRuntimeSet
   merged.llmPolish.apiKey = runtime.llmApiKey.trim();
   merged.llmPolish.autoPolishVoiceResult = autoVoicePolishEnabled;
   merged.llmPolish.style = runtime.llmStyle;
+  merged.llmPolish.promptTemplate =
+    resolveVoicePolishPromptTemplate(runtime.llmPromptTemplateMode, runtime.llmPromptTemplate);
   merged.privacy.enablePersonalization = runtime.enablePersonalization;
   return merged;
 }
@@ -351,7 +358,8 @@ function createDefaultLlmPolishConfig(): OffhandLlmPolishConfig {
     requestTimeoutMs: 45000,
     autoPolishVoiceResult: true,
     fallbackToLocalRewrite: true,
-    style: 'clean_conversational'
+    style: 'clean_conversational',
+    promptTemplate: DEFAULT_VOICE_POLISH_PROMPT
   };
 }
 
@@ -484,7 +492,8 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
       requestTimeoutMs: source.llmPolish.requestTimeoutMs,
       autoPolishVoiceResult: source.llmPolish.autoPolishVoiceResult,
       fallbackToLocalRewrite: source.llmPolish.fallbackToLocalRewrite,
-      style: source.llmPolish.style
+      style: source.llmPolish.style,
+      promptTemplate: normalizeVoicePolishPromptTemplate(source.llmPolish.promptTemplate)
     },
     privacy: {
       enablePersonalization: source.privacy.enablePersonalization

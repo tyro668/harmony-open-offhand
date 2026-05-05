@@ -19,7 +19,7 @@ export interface OffhandSubtypeExtras {
   supportedKeyboardLayouts?: KeyboardLayoutId[];
 }
 
-export type VoiceInputState = 'idle' | 'starting' | 'recording' | 'processing' | 'error';
+export type VoiceInputState = 'idle' | 'starting' | 'recording' | 'processing' | 'stopped' | 'error';
 
 export interface CandidateItem {
   index: number;
@@ -157,6 +157,8 @@ export interface BuiltinModelCatalog {
   providers: BuiltinModelProvider[];
 }
 
+export type VoicePolishPromptMode = 'default' | 'custom';
+
 export interface OffhandLlmPolishConfig {
   enabled: boolean;
   providerId: string;
@@ -171,6 +173,7 @@ export interface OffhandLlmPolishConfig {
   autoPolishVoiceResult: boolean;
   fallbackToLocalRewrite: boolean;
   style: string;
+  promptTemplate: string;
 }
 
 export interface OffhandPrivacyConfig {
@@ -200,6 +203,8 @@ export interface OffhandRuntimeSettings {
   llmPresetId: string;
   llmApiKey: string;
   llmStyle: string;
+  llmPromptTemplateMode: VoicePolishPromptMode;
+  llmPromptTemplate: string;
   defaultEntryMode: string;
   defaultSubtypeId: string;
   defaultKeyboardLayout: KeyboardLayoutId;

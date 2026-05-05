@@ -791,9 +791,8 @@ export class VoiceCaptureService {
         ? `${this.asrFinalizedText}${text}`
         : text;
     }
-    if (this.onTranscriptUpdate) {
-      this.onTranscriptUpdate(this.asrResultText);
-    }
+    // Built-in ASRKit may emit partial/final callbacks while the user is still
+    // speaking. Keep those results internal and surface text only after stop().
   }
 
   private maybeRestartBuiltinAsrAfterComplete(reason: string): void {

@@ -8,16 +8,26 @@ import {
   KeyboardLayoutId,
   KeyboardLayoutOption,
   OffhandRuntimeSettings,
-  SubtypeSummary
+  SubtypeSummary,
+  VoicePolishPromptMode
 } from '../common/ImeTypes';
 import { imeRuntime } from '../runtime/ImeRuntime';
 import { KeyboardUiState, keyboardStateStore } from '../session/KeyboardStateStore';
 import { listBuiltinModelProviders, resolveBuiltinModelSelection } from '../config/BuiltinModels';
 import { LlmSelectionSnapshot } from '../session/SessionManager';
 import { formatDirectPinyinRawInput } from '../session/DirectPinyinInput';
+import {
+  DEFAULT_VOICE_POLISH_PROMPT,
+  normalizeVoicePolishPromptMode,
+  normalizeVoicePolishPromptTemplate
+} from '../llm/DefaultPolishPrompt';
 
 const PANEL_DOMAIN: number = 0xFF10;
 const PANEL_TAG: string = 'KeyboardPanel';
+const BACKSPACE_LONG_PRESS_DURATION_MS: number = 450;
+const BACKSPACE_REPEAT_INTERVAL_MS: number = 70;
+const BACKSPACE_CLICK_SUPPRESSION_MS: number = 250;
+const VOICE_ANIMATION_INTERVAL_MS: number = 760;
 
 const LETTER_ROW_TOP: string[] = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
 const LETTER_ROW_MIDDLE: string[] = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'];
@@ -250,6 +260,8 @@ struct KeyboardPanel {
   @State private llmDialogProviderId: string = '';
   @State private llmDialogPresetId: string = '';
   @State private llmDialogApiKey: string = '';
+  @State private llmPromptTemplateMode: VoicePolishPromptMode = 'default';
+  @State private llmPromptTemplate: string = DEFAULT_VOICE_POLISH_PROMPT;
   // Toggles masking on the API Key input; matches the eye icon in the mockup.
   @State private llmApiKeyRevealed: boolean = false;
   @State private llmSaveStatus: string = '';
@@ -259,7 +271,10 @@ struct KeyboardPanel {
   @State private runtimeSaveStatus: string = '';
   private voicePulseTimer?: number;
   private qwertyLongPressSuppressTimer?: number;
+  private backspaceRepeatTimer?: number;
+  private backspaceLongPressSuppressTimer?: number;
   private suppressNextQwertyLetterClick: boolean = false;
+  private suppressNextBackspaceClick: boolean = false;
   private unsubscribe?: () => void;
   private lastNonVoiceSubtypeId: string = 'zh-Hans-pinyin';
   private lastNonVoiceKeyboardLayout: KeyboardLayoutId = 'qwerty_26';
@@ -327,14 +342,14 @@ struct KeyboardPanel {
     }
     this.stopVoicePulseAnimation();
     this.clearQwertyLongPressSuppressTimer();
+    this.stopBackspaceRepeat();
+    this.clearBackspaceLongPressSuppressTimer();
   }
 
   private syncVoicePulseAnimation(state: KeyboardUiState): void {
-    // Drive the large circle's breathing animation whenever the voice panel
-    // is actively listening OR the LLM is polishing the transcript, so the
-    // user always has a visual cue that background work is happening.
+    // Pulse only while capture is starting or actively recording.
     let shouldPulse = state.keyboardLayout === 'voice_panel'
-      && (state.voiceState === 'recording' || state.voiceState === 'starting' || state.isPolishRunning)
+      && (state.voiceState === 'recording' || state.voiceState === 'starting')
       && state.voiceEnabled;
     if (shouldPulse) {
       this.startVoicePulseAnimation();
@@ -348,11 +363,11 @@ struct KeyboardPanel {
       return;
     }
     // Kick off the first expansion immediately so users see motion without
-    // the initial 1400ms dead zone of a timer-driven toggle.
+    // the initial timer dead zone.
     this.voicePulseExpanded = true;
     this.voicePulseTimer = setInterval((): void => {
       this.voicePulseExpanded = !this.voicePulseExpanded;
-    }, 1400);
+    }, VOICE_ANIMATION_INTERVAL_MS);
   }
 
   private stopVoicePulseAnimation(): void {
@@ -368,6 +383,57 @@ struct KeyboardPanel {
       clearTimeout(this.qwertyLongPressSuppressTimer);
       this.qwertyLongPressSuppressTimer = undefined;
     }
+  }
+
+  private clearBackspaceLongPressSuppressTimer(): void {
+    if (this.backspaceLongPressSuppressTimer !== undefined) {
+      clearTimeout(this.backspaceLongPressSuppressTimer);
+      this.backspaceLongPressSuppressTimer = undefined;
+    }
+  }
+
+  private handleBackspaceClick(): void {
+    if (this.suppressNextBackspaceClick) {
+      this.suppressNextBackspaceClick = false;
+      this.clearBackspaceLongPressSuppressTimer();
+      return;
+    }
+    this.pressBackspaceOnce();
+  }
+
+  private pressBackspaceOnce(): void {
+    void imeRuntime.getSessionManager()?.pressBackspace();
+  }
+
+  private startBackspaceRepeat(): void {
+    if (this.backspaceRepeatTimer !== undefined) {
+      return;
+    }
+    this.pressBackspaceOnce();
+    this.backspaceRepeatTimer = setInterval((): void => {
+      this.pressBackspaceOnce();
+    }, BACKSPACE_REPEAT_INTERVAL_MS);
+  }
+
+  private stopBackspaceRepeat(): void {
+    if (this.backspaceRepeatTimer !== undefined) {
+      clearInterval(this.backspaceRepeatTimer);
+      this.backspaceRepeatTimer = undefined;
+    }
+  }
+
+  private finishBackspaceRepeat(): void {
+    this.stopBackspaceRepeat();
+    this.armBackspaceLongPressClickSuppression();
+  }
+
+  private armBackspaceLongPressClickSuppression(): void {
+    this.suppressNextBackspaceClick = true;
+    this.clearBackspaceLongPressSuppressTimer();
+    this.backspaceLongPressSuppressTimer = setTimeout((): void => {
+      this.suppressNextBackspaceClick = false;
+      this.backspaceLongPressSuppressTimer = undefined;
+    }, BACKSPACE_CLICK_SUPPRESSION_MS);
   }
 
   build() {
@@ -583,6 +649,10 @@ struct KeyboardPanel {
 
       if (this.activeSettingsTab === 'voicePolish') {
         this.renderLlmSettingsGrid()
+      } else if (this.activeSettingsTab === 'voicePolishModel') {
+        this.renderLlmModelSettingsGrid()
+      } else if (this.activeSettingsTab === 'voicePolishPrompt') {
+        this.renderLlmPromptSettingsGrid()
       } else {
         List({ space: 12 }) {
           ListItem() {
@@ -608,7 +678,9 @@ struct KeyboardPanel {
 
   @Builder
   private renderSettingsHeader() {
-    if (this.activeSettingsTab === 'voicePolish') {
+    if (this.activeSettingsTab === 'voicePolish' ||
+      this.activeSettingsTab === 'voicePolishModel' ||
+      this.activeSettingsTab === 'voicePolishPrompt') {
       this.renderVoicePolishSettingsHeader()
     } else {
       Row({ space: 8 }) {
@@ -660,7 +732,7 @@ struct KeyboardPanel {
         this.returnFromVoiceAutoPolishSettings();
       })
 
-      Text($r('app.string.ime_voice_auto_polish'))
+      Text(this.resolveVoicePolishHeaderTitle())
         .layoutWeight(1)
         .fontSize(16)
         .fontWeight(FontWeight.Bold)
@@ -683,6 +755,16 @@ struct KeyboardPanel {
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
+  }
+
+  private resolveVoicePolishHeaderTitle(): ResourceStr {
+    if (this.activeSettingsTab === 'voicePolishModel') {
+      return $r('app.string.ime_model_settings_title');
+    }
+    if (this.activeSettingsTab === 'voicePolishPrompt') {
+      return $r('app.string.ime_polish_prompt_title');
+    }
+    return $r('app.string.ime_voice_auto_polish');
   }
 
   @Builder
@@ -758,23 +840,12 @@ struct KeyboardPanel {
         .width('100%')
 
       Row({ space: 12 }) {
-        Column({ space: 4 }) {
-          Text($r('app.string.ime_voice_auto_polish'))
-            .fontSize(14)
-            .fontWeight(FontWeight.Bold)
-            .fontColor('#17181B')
-            .width('100%')
-            .textAlign(TextAlign.Start)
-
-          Text(this.runtimeAutoPolishVoiceResult ? this.resolveSavedVoicePolishModelLabel() : $r('app.string.ime_settings_off'))
-            .fontSize(11)
-            .fontColor('#7A7D82')
-            .width('100%')
-            .textAlign(TextAlign.Start)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .layoutWeight(1)
+        Text($r('app.string.ime_voice_auto_polish'))
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#17181B')
+          .textAlign(TextAlign.Start)
 
         Button() {
           Text('›')
@@ -793,7 +864,7 @@ struct KeyboardPanel {
       }
       .width('100%')
       .padding({ left: 16, right: 10, top: 14, bottom: 14 })
-      .alignItems(VerticalAlign.Top)
+      .alignItems(VerticalAlign.Center)
       .onClick(() => {
         this.openVoiceAutoPolishSettings();
       })
@@ -857,14 +928,26 @@ struct KeyboardPanel {
     .borderRadius(18)
   }
 
-  // Voice auto-polish subpage: the previous top-level model settings now live
-  // under the voice polish entry so model configuration only applies to voice
-  // transcripts.
   @Builder
   private renderLlmSettingsGrid() {
     List({ space: 12 }) {
       ListItem() {
-        this.renderVoiceAutoPolishSwitchCard()
+        this.renderVoiceAutoPolishSection()
+      }
+
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 4, right: 4, top: 4, bottom: 8 })
+    .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  private renderLlmPromptSettingsGrid() {
+    List({ space: 12 }) {
+      ListItem() {
+        this.renderVoicePolishPromptCard()
       }
 
       if (this.llmSaveStatus.length > 0) {
@@ -876,10 +959,28 @@ struct KeyboardPanel {
             .padding({ left: 4 })
         }
       }
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 4, right: 4, top: 4, bottom: 8 })
+    .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring)
+  }
 
-      if (this.runtimeAutoPolishVoiceResult) {
+  @Builder
+  private renderLlmModelSettingsGrid() {
+    List({ space: 12 }) {
+      ListItem() {
+        this.renderLlmCombinedCard()
+      }
+
+      if (this.llmSaveStatus.length > 0) {
         ListItem() {
-          this.renderLlmCombinedCard()
+          Text(this.llmSaveStatus)
+            .fontSize(11)
+            .fontColor('#3478F6')
+            .width('100%')
+            .padding({ left: 4 })
         }
       }
     }
@@ -891,28 +992,45 @@ struct KeyboardPanel {
   }
 
   @Builder
+  private renderVoiceAutoPolishSection() {
+    Column() {
+      this.renderVoiceAutoPolishSwitchCard()
+      Divider()
+        .strokeWidth(1)
+        .color('#F0F2F6')
+        .width('100%')
+      this.renderVoicePolishSettingsEntryRow(
+        $r('app.string.ime_model_settings_title'),
+        (): void => {
+          this.openVoicePolishModelSettings();
+        })
+      Divider()
+        .strokeWidth(1)
+        .color('#F0F2F6')
+        .width('100%')
+      this.renderVoicePolishSettingsEntryRow(
+        $r('app.string.ime_polish_prompt_title'),
+        (): void => {
+          this.openVoicePolishPromptSettings();
+        })
+    }
+    .width('100%')
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
   private renderVoiceAutoPolishSwitchCard() {
     Column() {
       Row({ space: 12 }) {
-        Column({ space: 4 }) {
-          Text($r('app.string.ime_voice_auto_polish_enable'))
-            .fontSize(14)
-            .fontWeight(FontWeight.Bold)
-            .fontColor('#17181B')
-            .width('100%')
-            .textAlign(TextAlign.Start)
-
-          Text(this.runtimeAutoPolishVoiceResult ?
-            $r('app.string.ime_voice_auto_polish_on_hint') :
-            $r('app.string.ime_voice_auto_polish_off_hint'))
-            .fontSize(11)
-            .fontColor('#7A7D82')
-            .width('100%')
-            .textAlign(TextAlign.Start)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .layoutWeight(1)
+        Text($r('app.string.ime_voice_auto_polish_enable'))
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#17181B')
+          .textAlign(TextAlign.Start)
 
         Toggle({ type: ToggleType.Switch, isOn: this.runtimeAutoPolishVoiceResult })
           .selectedColor('#3478F6')
@@ -928,12 +1046,199 @@ struct KeyboardPanel {
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 14, bottom: 14 })
-      .alignItems(VerticalAlign.Top)
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
+  }
+
+  @Builder
+  private renderVoicePolishSettingsEntryRow(title: ResourceStr, action: () => void) {
+    Row({ space: 12 }) {
+      Text(title)
+        .layoutWeight(1)
+        .fontSize(14)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#17181B')
+        .textAlign(TextAlign.Start)
+
+      Text('›')
+        .fontSize(23)
+        .fontColor('#7A7D82')
+        .height('100%')
+        .textAlign(TextAlign.Center)
+    }
+    .width('100%')
+    .height(62)
+    .padding({ left: 12, right: 12, top: 0, bottom: 0 })
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      action();
+    })
+  }
+
+  @Builder
+  private renderLlmModelEntryCard() {
+    Button() {
+      Row({ space: 12 }) {
+        Text($r('app.string.ime_model_settings_title'))
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#17181B')
+          .textAlign(TextAlign.Start)
+
+        Text('›')
+          .fontSize(23)
+          .fontColor('#7A7D82')
+          .height('100%')
+          .textAlign(TextAlign.Center)
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ left: 12, right: 12, top: 0, bottom: 0 })
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(62)
     .backgroundColor('#FFFFFF')
     .borderRadius(14)
     .border({ width: 1, color: '#E4E6EA' })
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .onClick(() => {
+      this.openVoicePolishModelSettings();
+    })
+  }
+
+  @Builder
+  private renderVoicePolishPromptEntryCard() {
+    Button() {
+      Row({ space: 12 }) {
+        Text($r('app.string.ime_polish_prompt_title'))
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#17181B')
+          .textAlign(TextAlign.Start)
+
+        Text('›')
+          .fontSize(23)
+          .fontColor('#7A7D82')
+          .height('100%')
+          .textAlign(TextAlign.Center)
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ left: 12, right: 12, top: 0, bottom: 0 })
+      .alignItems(VerticalAlign.Center)
+    }
+    .width('100%')
+    .height(62)
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .onClick(() => {
+      this.openVoicePolishPromptSettings();
+    })
+  }
+
+  @Builder
+  private renderVoicePolishPromptCard() {
+    Column({ space: 12 }) {
+      Row({ space: 10 }) {
+        Text($r('app.string.ime_polish_prompt_title'))
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#17181B')
+          .textAlign(TextAlign.Start)
+
+        Button($r('app.string.ime_action_reset_default'))
+          .width(72)
+          .height(32)
+          .fontSize(12)
+          .fontColor('#3478F6')
+          .backgroundColor('#F4F8FF')
+          .borderRadius(10)
+          .padding({ left: 10, right: 10 })
+          .opacity(this.llmPromptTemplateMode === 'custom' ? 1 : 0)
+          .enabled(this.llmPromptTemplateMode === 'custom')
+          .onClick(() => {
+            if (this.llmPromptTemplateMode === 'custom') {
+              this.llmPromptTemplate = DEFAULT_VOICE_POLISH_PROMPT;
+              this.llmSaveStatus = '';
+            }
+          })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Row({ space: 4 }) {
+        this.renderVoicePolishPromptModeButton('default', $r('app.string.ime_polish_prompt_default_mode'))
+        this.renderVoicePolishPromptModeButton('custom', $r('app.string.ime_polish_prompt_custom_mode'))
+      }
+      .width('100%')
+      .height(38)
+      .padding({ left: 3, right: 3, top: 3, bottom: 3 })
+      .backgroundColor('#F1F3F6')
+      .border({ width: 1, color: '#EAECF1' })
+      .borderRadius(19)
+
+      TextArea({
+        placeholder: $r('app.string.ime_polish_prompt_placeholder'),
+        text: this.resolveVoicePolishPromptEditorText()
+      })
+        .width('100%')
+        .height(188)
+        .fontSize(11)
+        .fontColor(this.llmPromptTemplateMode === 'custom' ? '#1F2329' : '#6B7280')
+        .backgroundColor('#F7F8FA')
+        .borderRadius(10)
+        .border({ width: 1, color: '#EAECF1' })
+        .padding({ left: 10, right: 10, top: 9, bottom: 9 })
+        .enabled(this.llmPromptTemplateMode === 'custom')
+        .onChange((value: string) => {
+          if (this.llmPromptTemplateMode !== 'custom') {
+            return;
+          }
+          this.llmPromptTemplate = value;
+          this.llmSaveStatus = '';
+        })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 14, bottom: 14 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
+  }
+
+  @Builder
+  private renderVoicePolishPromptModeButton(mode: VoicePolishPromptMode, label: ResourceStr) {
+    Button() {
+      Text(label)
+        .width('100%')
+        .fontSize(12)
+        .fontWeight(this.llmPromptTemplateMode === mode ? FontWeight.Bold : FontWeight.Medium)
+        .fontColor(this.llmPromptTemplateMode === mode ? '#17181B' : '#60636A')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    }
+    .layoutWeight(1)
+    .height(32)
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .backgroundColor(this.llmPromptTemplateMode === mode ? '#FFFFFF' : 'rgba(0,0,0,0)')
+    .borderRadius(16)
+    .shadow(this.resolveSettingsTabShadow(this.llmPromptTemplateMode === mode))
+    .onClick(() => {
+      this.llmPromptTemplateMode = mode;
+      this.llmSaveStatus = '';
+    })
+  }
+
+  private resolveVoicePolishPromptEditorText(): string {
+    return this.llmPromptTemplateMode === 'custom' ?
+      this.llmPromptTemplate :
+      DEFAULT_VOICE_POLISH_PROMPT;
   }
 
   // All three LLM selectors (provider / model / API key) live in a single
@@ -1261,6 +1566,8 @@ struct KeyboardPanel {
     let autoVoicePolishEnabled = runtime.enableCloudPolish && runtime.autoPolishVoiceResult;
     this.runtimeEnableCloudPolish = autoVoicePolishEnabled;
     this.runtimeAutoPolishVoiceResult = autoVoicePolishEnabled;
+    this.llmPromptTemplateMode = normalizeVoicePolishPromptMode(runtime.llmPromptTemplateMode, runtime.llmPromptTemplate);
+    this.llmPromptTemplate = normalizeVoicePolishPromptTemplate(runtime.llmPromptTemplate);
     this.runtimeSaveStatus = '';
   }
 
@@ -1288,13 +1595,24 @@ struct KeyboardPanel {
   }
 
   private returnFromVoiceAutoPolishSettings(): void {
+    if (this.activeSettingsTab === 'voicePolishModel') {
+      void this.saveLlmDialogSettings('')
+        .then((): void => {
+          this.activeSettingsTab = 'voicePolish';
+        });
+      return;
+    }
+    if (this.activeSettingsTab === 'voicePolishPrompt') {
+      void this.saveVoiceAutoPolishSettings('')
+        .then((): void => {
+          this.activeSettingsTab = 'voicePolish';
+        });
+      return;
+    }
     this.activeSettingsTab = 'common';
-    void this.saveVoiceAutoPolishSettings('已保存语音后自动润色配置')
-      .then((saved: boolean): void => {
+    void this.saveVoiceAutoPolishSettings('')
+      .then((): void => {
         this.seedRuntimeSettingsState();
-        if (saved) {
-          this.runtimeSaveStatus = '已保存语音后自动润色配置';
-        }
       });
   }
 
@@ -1303,6 +1621,26 @@ struct KeyboardPanel {
       .finally((): void => {
         this.closeSettingsOverlay();
       });
+  }
+
+  private openVoicePolishModelSettings(): void {
+    this.seedLlmDialogState();
+    this.llmSaveStatus = '';
+    this.activeSettingsTab = 'voicePolishModel';
+  }
+
+  private openVoicePolishPromptSettings(): void {
+    this.llmPromptTemplateMode = normalizeVoicePolishPromptMode(this.llmPromptTemplateMode, this.llmPromptTemplate);
+    this.llmPromptTemplate = normalizeVoicePolishPromptTemplate(this.llmPromptTemplate);
+    this.llmSaveStatus = '';
+    this.activeSettingsTab = 'voicePolishPrompt';
+  }
+
+  private resolvePolishPromptSummary(): ResourceStr {
+    if (this.llmPromptTemplateMode === 'default') {
+      return $r('app.string.ime_polish_prompt_default_summary');
+    }
+    return $r('app.string.ime_polish_prompt_custom_summary');
   }
 
   private async saveVoiceAutoPolishSettings(successText: string): Promise<boolean> {
@@ -1320,6 +1658,8 @@ struct KeyboardPanel {
       runtime.enableBuiltinAsr = this.runtimeEnableBuiltinAsr;
       runtime.enableCloudPolish = this.runtimeAutoPolishVoiceResult;
       runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
+      runtime.llmPromptTemplateMode = this.llmPromptTemplateMode;
+      runtime.llmPromptTemplate = normalizeVoicePolishPromptTemplate(this.llmPromptTemplate);
       await session.updateRuntimeSettings(runtime, 'keyboardVoicePolishSettings');
 
       if (this.runtimeAutoPolishVoiceResult) {
@@ -1360,23 +1700,26 @@ struct KeyboardPanel {
       });
   }
 
-  private saveLlmDialog(): void {
+  private async saveLlmDialogSettings(successText: string): Promise<boolean> {
     let session = imeRuntime.getSessionManager();
     if (!session) {
       this.llmSaveStatus = '保存失败：会话未就绪';
-      return;
+      return false;
     }
     let providerId: string = this.llmDialogProviderId;
     let presetId: string = this.llmDialogPresetId;
     let apiKey: string = this.llmDialogApiKey;
-    this.llmSaveStatus = '保存中…';
-    session.updateLlmSelection(providerId, presetId, apiKey)
-      .then((): void => {
-        this.llmSaveStatus = '已保存';
-      })
-      .catch((error: Error): void => {
-        this.llmSaveStatus = '保存失败：' + (error.message ?? String(error));
-      });
+    try {
+      this.llmSaveStatus = successText.length > 0 ? '保存中…' : '';
+      await session.updateLlmSelection(providerId, presetId, apiKey);
+      if (successText.length > 0) {
+        this.llmSaveStatus = successText;
+      }
+      return true;
+    } catch (error) {
+      this.llmSaveStatus = '保存失败：' + ((error as Error).message ?? String(error));
+      return false;
+    }
   }
 
   @Builder
@@ -1781,7 +2124,7 @@ struct KeyboardPanel {
       })
 
       this.renderExpandedCandidateIconButton('backspace', (): void => {
-        void imeRuntime.getSessionManager()?.pressBackspace();
+        this.handleBackspaceClick();
       })
 
       this.renderExpandedCandidateModeButton()
@@ -1926,6 +2269,19 @@ struct KeyboardPanel {
     .onClick(() => {
       action();
     })
+    .gesture(
+      LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+        .onAction(() => {
+          if (kind === 'backspace') {
+            this.startBackspaceRepeat();
+          }
+        })
+        .onActionEnd(() => {
+          if (kind === 'backspace') {
+            this.finishBackspaceRepeat();
+          }
+        })
+    )
   }
 
   @Builder
@@ -2013,7 +2369,7 @@ struct KeyboardPanel {
 
         Column({ space: 4 }) {
           this.renderSideActionKey('⌫', (): void => {
-            void imeRuntime.getSessionManager()?.pressBackspace();
+            this.handleBackspaceClick();
           })
 
         this.renderSideActionKey('清空', (): void => {
@@ -2072,7 +2428,7 @@ struct KeyboardPanel {
         }, (descriptor: QwertyKeyDescriptor): string => descriptor.value)
 
         this.renderReferenceQwertySideKey('⌫', (): void => {
-          void imeRuntime.getSessionManager()?.pressBackspace();
+          this.handleBackspaceClick();
         }, false, 1.5)
       }
       .width('100%')
@@ -2303,16 +2659,22 @@ struct KeyboardPanel {
     .stateStyles({ pressed: this.pressedGrayKeyStyle })
     .clip(true)
     .onClick(() => {
-      void imeRuntime.getSessionManager()?.pressBackspace();
+      this.handleBackspaceClick();
     })
+    .gesture(
+      LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+        .onAction(() => {
+          this.startBackspaceRepeat();
+        })
+        .onActionEnd(() => {
+          this.finishBackspaceRepeat();
+        })
+    )
   }
 
   @Builder
   private renderNumberKeyboardSpaceKey() {
-    Column({ space: this.resolveReferenceNumberKeyboardScaledSize(4) }) {
-      this.renderIconAsset('mic', this.resolveReferenceNumberKeyboardScaledSize(25),
-        this.resolveReferenceNumberKeyboardScaledSize(22), 0.76)
-
+    Column() {
       Row() {
         Column()
           .width(this.resolveReferenceNumberKeyboardScaledSize(3))
@@ -2460,10 +2822,7 @@ struct KeyboardPanel {
         this.renderIconAsset('backspace', this.resolveReferenceQwertyScaledSize(34),
           this.resolveReferenceQwertyScaledSize(26))
       } else if (descriptor.role === 'space') {
-        Column({ space: this.resolveReferenceQwertyScaledSize(5) }) {
-          this.renderIconAsset('mic', this.resolveReferenceQwertyScaledSize(23),
-            this.resolveReferenceQwertyScaledSize(20), 0.76)
-
+        Column() {
           Row() {
             Column()
               .width(this.resolveReferenceQwertyScaledSize(3))
@@ -2509,134 +2868,270 @@ struct KeyboardPanel {
     .onClick(() => {
       this.handleSymbolKeyboardKey(descriptor);
     })
+    .gesture(
+      LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+        .onAction(() => {
+          if (descriptor.role === 'backspace') {
+            this.startBackspaceRepeat();
+          }
+        })
+        .onActionEnd(() => {
+          if (descriptor.role === 'backspace') {
+            this.finishBackspaceRepeat();
+          }
+        })
+    )
   }
 
   @Builder
   private renderVoicePanel() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Column({ space: 12 }) {
-        Stack() {
-          // Outer pulse ring: continuously expands and fades. Used for both
-          // recording and LLM polishing; color and amplitude vary by state.
-          Column()
-            .width(104)
-            .height(104)
-            .borderRadius(52)
-            .backgroundColor(this.resolveVoicePulseColor())
-            .opacity(this.voicePulseExpanded ? 0 : (this.uiState.isPolishRunning ? 0.34 : 0.24))
-            .scale({
-              x: this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 1.9 : 1.7) : 1,
-              y: this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 1.9 : 1.7) : 1
-            })
-            .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
+      Column({ space: 4 }) {
+        this.renderVoiceHeroButton()
 
-          Column()
-            .width(104)
-            .height(104)
-            .borderRadius(52)
-            .backgroundColor(this.resolveVoicePulseColor())
-            .opacity(this.voicePulseExpanded ? (this.uiState.isPolishRunning ? 0.22 : 0.16) : 0)
-            .scale({
-              x: this.voicePulseExpanded ? 1 : (this.uiState.isPolishRunning ? 1.55 : 1.4),
-              y: this.voicePulseExpanded ? 1 : (this.uiState.isPolishRunning ? 1.55 : 1.4)
-            })
-            .animation({ duration: 1400, curve: Curve.EaseOut, iterations: 1 })
-
-          Button() {
-            if (this.uiState.isPolishRunning) {
-              // Center the polishing label inside the mic circle so the
-              // status cue reads as part of the button; the surrounding
-              // pulse rings still convey motion.
-              Text($r('app.string.ime_polishing'))
-                .fontSize(15)
-                .fontColor('#FFFFFF')
-                .fontWeight(FontWeight.Medium)
-                .opacity(this.voicePulseExpanded ? 1 : 0.78)
-                .animation({ duration: 1400, curve: Curve.EaseInOut, iterations: 1 })
-            } else if (this.uiState.voiceState === 'recording') {
-              Text('●')
-                .fontSize(44)
-                .fontColor('#FFFFFF')
-            } else if (this.uiState.voiceState === 'starting') {
-              this.renderIconAsset('mic', 32, 32, 0.78)
-            } else {
-              this.renderIconAsset('mic', 40, 40)
-            }
-          }
-          .width(104)
-          .height(104)
-          .type(ButtonType.Circle)
-          .backgroundColor(
-            this.uiState.voiceState === 'recording' ? '#FF5252' :
-            this.uiState.voiceState === 'starting' ? '#5C7CFF' :
-            this.uiState.voiceState === 'error' ? '#EF4444' : '#3366FF'
-          )
-          .opacity(this.uiState.voiceEnabled ? 1 : 0.65)
-          .onClick(() => {
-            this.startOrStopVoice();
-          })
-        }
-        .width(200)
-        .height(200)
-        .alignContent(Alignment.Center)
-
-        if (this.shouldRenderVoiceStatusLabel()) {
-          this.renderVoiceStatusLabel()
+        if (this.shouldRenderVoiceHeroTitle()) {
+          Text(this.resolveVoiceHeroTitle())
+            .fontSize(this.resolveVoiceScaledSize(14))
+            .minFontSize(12)
+            .maxFontSize(this.resolveVoiceScaledSize(14))
+            .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.resolveVoiceHeroTitleColor())
+            .textAlign(TextAlign.Center)
+            .constraintSize({ maxWidth: this.resolveVoiceTextMaxWidth() })
+            .maxLines(1)
         }
       }
       .width('100%')
       .height('100%')
+      .padding({ top: 8, bottom: 10 })
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
 
-      // Realtime transcript overlay: anchored to the top-left of the voice
-      // panel so text streams in from left to right and wraps downward,
-      // visually overlapping the pulse rings and mic circle below. The
-      // transparent hit-test keeps taps falling through to the record
-      // button underneath.
       if (this.uiState.voiceTranscriptPreview.length > 0) {
         Text(this.uiState.voiceTranscriptPreview)
           .fontSize(16)
-          .fontColor('#1C1C1F')
+          .fontColor('#1D2842')
           .fontWeight(FontWeight.Medium)
           .textAlign(TextAlign.Start)
-          .maxLines(8)
+          .maxLines(5)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-          .padding({ left: 16, right: 16, top: 12, bottom: 0 })
+          .padding({ left: 20, right: 20, top: 14, bottom: 0 })
           .hitTestBehavior(HitTestMode.Transparent)
       }
 
-      // Bottom-right backspace: clean pill-shaped button with icon.
-      // Short tap deletes one character, long press clears all.
-      Column() {
-        Button() {
-          this.renderIconAsset('backspace', 22, 18)
-        }
-        .width(48)
-        .height(36)
-        .type(ButtonType.Normal)
-        .backgroundColor('rgba(0,0,0,0.06)')
-        .borderRadius(18)
-        .onClick(() => {
-          void imeRuntime.getSessionManager()?.pressBackspace();
-        })
-        .gesture(
-          LongPressGesture({ repeat: false, duration: 450 })
-            .onAction(() => {
-              void imeRuntime.getSessionManager()?.clearEditorText();
-            })
-        )
-      }
-      .width('100%')
-      .height('100%')
-      .padding({ right: 16, bottom: 16 })
-      .justifyContent(FlexAlign.End)
-      .alignItems(HorizontalAlign.End)
-      .hitTestBehavior(HitTestMode.Transparent)
+      this.renderVoicePanelBackspaceButton()
     }
     .width('100%')
     .layoutWeight(1)
+  }
+
+  @Builder
+  private renderVoiceHeroButton() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width(this.resolveVoiceScaledSize(118))
+        .height(this.resolveVoiceScaledSize(118))
+        .borderRadius(this.resolveVoiceScaledSize(59))
+        .backgroundColor(this.resolveVoicePulseColor())
+        .opacity(this.resolveVoiceOuterPulseOpacity())
+        .scale({
+          x: this.resolveVoiceOuterPulseScale(),
+          y: this.resolveVoiceOuterPulseScale()
+        })
+        .animation({ duration: VOICE_ANIMATION_INTERVAL_MS, curve: Curve.EaseOut, iterations: 1 })
+
+      Column()
+        .width(this.resolveVoiceScaledSize(100))
+        .height(this.resolveVoiceScaledSize(100))
+        .borderRadius(this.resolveVoiceScaledSize(50))
+        .backgroundColor(this.resolveVoicePulseColor())
+        .opacity(this.resolveVoiceInnerPulseOpacity())
+        .scale({
+          x: this.resolveVoiceInnerPulseScale(),
+          y: this.resolveVoiceInnerPulseScale()
+        })
+        .animation({ duration: VOICE_ANIMATION_INTERVAL_MS, curve: Curve.EaseOut, iterations: 1 })
+
+      Button() {
+        if (this.uiState.isPolishRunning) {
+          Text($r('app.string.ime_polishing'))
+            .fontSize(15)
+            .fontColor('#FFFFFF')
+            .fontWeight(FontWeight.Bold)
+            .opacity(this.voicePulseExpanded ? 1 : 0.78)
+            .animation({ duration: VOICE_ANIMATION_INTERVAL_MS, curve: Curve.EaseInOut, iterations: 1 })
+        } else {
+          Image($r('app.media.ime_icon_voice_mic_white'))
+            .width(this.resolveVoiceScaledSize(44))
+            .height(this.resolveVoiceScaledSize(44))
+            .objectFit(ImageFit.Contain)
+            .opacity(this.uiState.voiceState === 'starting' ? 0.78 : 1)
+            .scale({
+              x: this.isVoiceMotionActive() && this.voicePulseExpanded ? 1.07 : 1,
+              y: this.isVoiceMotionActive() && this.voicePulseExpanded ? 1.07 : 1
+            })
+            .animation({ duration: VOICE_ANIMATION_INTERVAL_MS, curve: Curve.EaseInOut, iterations: 1 })
+        }
+      }
+      .width(this.resolveVoiceScaledSize(82))
+      .height(this.resolveVoiceScaledSize(82))
+      .type(ButtonType.Circle)
+      .backgroundColor(this.resolveVoiceButtonColor())
+      .border({ width: 3, color: 'rgba(255,255,255,0.82)' })
+      .shadow({
+        radius: 18,
+        color: '#403366FF',
+        offsetX: 0,
+        offsetY: 10
+      })
+      .opacity(this.uiState.voiceEnabled ? 1 : 0.58)
+      .onClick(() => {
+        this.startOrStopVoice();
+      })
+    }
+    .width(this.resolveVoiceScaledSize(138))
+    .height(this.resolveVoiceScaledSize(108))
+  }
+
+  @Builder
+  private renderVoicePanelBackspaceButton() {
+    Column() {
+      Button() {
+        this.renderIconAsset('backspace', this.resolveVoiceScaledSize(30), this.resolveVoiceScaledSize(23))
+      }
+      .width(this.resolveVoiceScaledSize(72))
+      .height(this.resolveVoiceScaledSize(42))
+      .type(ButtonType.Normal)
+      .backgroundColor('rgba(255,255,255,0.34)')
+      .border({ width: 2, color: 'rgba(255,255,255,0.64)' })
+      .borderRadius(this.resolveVoiceScaledSize(21))
+      .shadow({
+        radius: 8,
+        color: '#16000000',
+        offsetX: 0,
+        offsetY: 4
+      })
+      .onClick(() => {
+        this.handleBackspaceClick();
+      })
+      .gesture(
+        LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+          .onAction(() => {
+            this.startBackspaceRepeat();
+          })
+          .onActionEnd(() => {
+            this.finishBackspaceRepeat();
+          })
+      )
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ right: 18, bottom: 14 })
+    .justifyContent(FlexAlign.End)
+    .alignItems(HorizontalAlign.End)
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  private isVoiceMotionActive(): boolean {
+    return this.uiState.voiceState === 'recording' ||
+      this.uiState.voiceState === 'starting';
+  }
+
+  private resolveVoiceScaledSize(referenceSize: number): number {
+    return this.resolveReferenceQwertyScaledSize(referenceSize);
+  }
+
+  private resolveVoiceTextMaxWidth(): number {
+    return Math.max(168, Math.round(this.resolveReferenceQwertyContentWidth() * 0.62));
+  }
+
+  private resolveVoiceButtonColor(): string {
+    if (this.uiState.voiceState === 'error') {
+      return '#4B6DFF';
+    }
+    if (this.uiState.isPolishRunning) {
+      return '#536DFF';
+    }
+    if (this.uiState.voiceState === 'recording') {
+      return '#1E74FF';
+    }
+    if (this.uiState.voiceState === 'starting') {
+      return '#4B78FF';
+    }
+    return '#2F6BFF';
+  }
+
+  private resolveVoiceOuterPulseOpacity(): number {
+    if (!this.isVoiceMotionActive()) {
+      return 0;
+    }
+    if (this.uiState.voiceState === 'starting') {
+      return this.voicePulseExpanded ? 0.08 : 0.28;
+    }
+    return this.voicePulseExpanded ? 0.05 : 0.22;
+  }
+
+  private resolveVoiceInnerPulseOpacity(): number {
+    if (!this.isVoiceMotionActive()) {
+      return 0;
+    }
+    if (this.uiState.voiceState === 'starting') {
+      return this.voicePulseExpanded ? 0.18 : 0.36;
+    }
+    return this.voicePulseExpanded ? 0.14 : 0.3;
+  }
+
+  private resolveVoiceOuterPulseScale(): number {
+    if (!this.isVoiceMotionActive()) {
+      return 0.96;
+    }
+    if (this.uiState.voiceState === 'starting') {
+      return this.voicePulseExpanded ? 1.2 : 0.92;
+    }
+    return this.voicePulseExpanded ? 1.18 : 0.96;
+  }
+
+  private resolveVoiceInnerPulseScale(): number {
+    if (!this.isVoiceMotionActive()) {
+      return 0.96;
+    }
+    if (this.uiState.voiceState === 'starting') {
+      return this.voicePulseExpanded ? 1.11 : 0.94;
+    }
+    return this.voicePulseExpanded ? 1.08 : 0.96;
+  }
+
+  private resolveVoiceHeroTitle(): ResourceStr {
+    if (this.uiState.isPolishRunning ||
+      this.containsVoiceStatusText('voice.polishing') ||
+      this.containsVoiceStatusText('Polishing')) {
+      return $r('app.string.ime_voice_status_polishing');
+    }
+    if (this.uiState.voiceState === 'processing' || this.containsVoiceStatusText('voice.processing')) {
+      return $r('app.string.ime_voice_status_processing');
+    }
+    if (this.uiState.voiceState === 'recording') {
+      return '正在聆听';
+    }
+    return '';
+  }
+
+  private shouldRenderVoiceHeroTitle(): boolean {
+    return this.uiState.voiceState === 'recording' ||
+      this.uiState.voiceState === 'processing' ||
+      this.containsVoiceStatusText('voice.processing') ||
+      this.uiState.isPolishRunning ||
+      this.containsVoiceStatusText('voice.polishing') ||
+      this.containsVoiceStatusText('Polishing');
+  }
+
+  private resolveVoiceHeroTitleColor(): string {
+    if (this.isVoiceStatusPermissionDenied() || this.uiState.voiceState === 'error') {
+      return '#D14343';
+    }
+    return '#18233C';
   }
 
   @Builder
@@ -2919,26 +3414,14 @@ struct KeyboardPanel {
 
   @Builder
   private renderVoiceStatusLabel() {
-    if (this.isVoiceStatusPermissionDenied()) {
-      this.renderVoiceStatusText($r('app.string.ime_voice_status_permission_denied'), true)
-    } else if (!this.uiState.voiceEnabled || this.isVoiceStatusUnavailable()) {
-      this.renderVoiceStatusText($r('app.string.ime_voice_status_unavailable'), this.uiState.voiceState === 'error')
-    } else if (this.isVoiceStatusNoSpeech()) {
-      this.renderVoiceStatusText($r('app.string.ime_voice_status_no_speech'), false)
-    } else if (this.uiState.isPolishRunning ||
+    if (this.uiState.isPolishRunning ||
       this.containsVoiceStatusText('voice.polishing') ||
       this.containsVoiceStatusText('Polishing')) {
       this.renderVoiceStatusText($r('app.string.ime_voice_status_polishing'), false)
-    } else if (this.containsVoiceStatusText('voice.stopping') || this.containsVoiceStatusText('Stopping')) {
-      this.renderVoiceStatusText($r('app.string.ime_voice_status_stopping'), false)
-    } else if (this.containsVoiceStatusText('voice.preparing')) {
-      this.renderVoiceStatusText($r('app.string.ime_voice_status_preparing'), false)
-    } else if (this.uiState.voiceState === 'processing') {
+    } else if (this.uiState.voiceState === 'processing' || this.containsVoiceStatusText('voice.processing')) {
       this.renderVoiceStatusText($r('app.string.ime_voice_status_processing'), false)
-    } else if (this.uiState.voiceState === 'error') {
-      this.renderVoiceStatusText($r('app.string.ime_voice_status_failed'), true)
-    } else {
-      this.renderVoiceStatusText($r('app.string.ime_voice_status_idle'), false)
+    } else if (this.uiState.voiceState === 'recording') {
+      this.renderVoiceStatusText('正在聆听', false)
     }
   }
 
@@ -2951,7 +3434,7 @@ struct KeyboardPanel {
   }
 
   private shouldRenderVoiceStatusLabel(): boolean {
-    return this.uiState.voiceState !== 'recording' && this.uiState.voiceState !== 'starting';
+    return this.shouldRenderVoiceHeroTitle();
   }
 
   private isVoiceStatusPermissionDenied(): boolean {
@@ -3066,6 +3549,19 @@ struct KeyboardPanel {
       hilog.info(PANEL_DOMAIN, PANEL_TAG, 'sideActionKey click label=%{public}s', label);
       action();
     })
+    .gesture(
+      LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+        .onAction(() => {
+          if (label === '⌫') {
+            this.startBackspaceRepeat();
+          }
+        })
+        .onActionEnd(() => {
+          if (label === '⌫') {
+            this.finishBackspaceRepeat();
+          }
+        })
+    )
   }
 
   @Builder
@@ -3219,6 +3715,19 @@ struct KeyboardPanel {
     .onClick(() => {
       action();
     })
+    .gesture(
+      LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+        .onAction(() => {
+          if (label === '⌫') {
+            this.startBackspaceRepeat();
+          }
+        })
+        .onActionEnd(() => {
+          if (label === '⌫') {
+            this.finishBackspaceRepeat();
+          }
+        })
+    )
   }
 
   @Builder
@@ -3330,9 +3839,7 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertySpaceKey(weight: number = 2.5) {
-    Column({ space: 5 }) {
-      this.renderIconAsset('mic', 23, 20, 0.76)
-
+    Column() {
       Row() {
         Column()
           .width(3)
@@ -3652,7 +4159,7 @@ struct KeyboardPanel {
         this.insertSymbolText(descriptor.output);
         break;
       case 'backspace':
-        void imeRuntime.getSessionManager()?.pressBackspace();
+        this.handleBackspaceClick();
         break;
       case 'more':
         this.symbolKeyboardMorePage = !this.symbolKeyboardMorePage;
@@ -3728,7 +4235,10 @@ struct KeyboardPanel {
       void imeRuntime.getSessionManager()?.clearActiveInput();
       return;
     }
-    if (this.uiState.voiceState === 'idle' || this.uiState.voiceState === 'error') {
+    if (this.uiState.isPolishRunning || this.containsVoiceStatusText('voice.processing')) {
+      return;
+    }
+    if (this.uiState.voiceState === 'idle' || this.uiState.voiceState === 'stopped' || this.uiState.voiceState === 'error') {
       void imeRuntime.getSessionManager()?.startVoiceInput();
     }
   }
@@ -3829,7 +4339,6 @@ struct KeyboardPanel {
 
     if (this.hasLayoutOption('voice_panel')) {
       await sessionManager.switchKeyboardLayout('voice_panel');
-      await sessionManager.startVoiceInput();
       return;
     }
 
@@ -3839,7 +4348,6 @@ struct KeyboardPanel {
     }
     await sessionManager.switchSubtype(voiceSubtypeId);
     await sessionManager.switchKeyboardLayout('voice_panel');
-    await sessionManager.startVoiceInput();
   }
 
   private closeSettingsOverlay(): void {

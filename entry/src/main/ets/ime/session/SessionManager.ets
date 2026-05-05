@@ -777,7 +777,9 @@ export class SessionManager {
     }
     try {
       this.voiceCaptureService.setRuntimeContext(this.context);
-      // 设置实时转写回调，录音过程中实时显示识别文字
+      // Built-in ASRKit keeps transcript callbacks internal and only surfaces
+      // text after stop(); this listener remains for providers that emit a
+      // completed transcript through the shared callback.
       this.voiceCaptureService.setTranscriptListener((text: string): void => {
         keyboardStateStore.patch({
           voiceTranscriptPreview: text,
@@ -811,9 +813,9 @@ export class SessionManager {
     let voiceConfig = this.configRepository.getConfig().voice;
     let durationMs = this.voiceCaptureService.getRecordingDurationMs();
     keyboardStateStore.patch({
-      voiceState: 'processing',
-      voiceStatusText: discardResult ? 'voice.stopping' : 'voice.processing',
-      statusText: 'Voice processing'
+      voiceState: 'stopped',
+      voiceStatusText: discardResult ? '' : 'voice.processing',
+      statusText: discardResult ? 'Voice stopping' : 'Voice processing'
     });
     try {
       let result = await this.voiceCaptureService.stop(voiceConfig, this.currentSubtype.locale);
@@ -826,7 +828,7 @@ export class SessionManager {
       if (transcript.length === 0) {
         // 空识别结果是正常情况（如无声/噪音），不应标记为 error 导致红色按钮
         keyboardStateStore.patch({
-          voiceState: 'idle',
+          voiceState: 'stopped',
           voiceStatusText: 'voice.no_speech',
           voiceTranscriptPreview: '',
           voiceDraftText: ''
@@ -1024,8 +1026,8 @@ export class SessionManager {
         isPolishRunning: false
       });
       keyboardStateStore.patch({
-        voiceState: 'idle',
-        voiceStatusText: '',
+        voiceState: 'stopped',
+        voiceStatusText: 'voice.stopped',
         statusText: hasPendingVoiceDraft ?
           (this.pendingPolishSuggestion ?
             `Voice draft ready with suggestion (${statusSource})` :
