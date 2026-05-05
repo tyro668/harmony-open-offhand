@@ -469,6 +469,10 @@ struct KeyboardPanel {
             this.renderCandidateToolbarOverlay()
           }
         }
+
+        if (this.uiState.isInputLoading) {
+          this.renderInputLoadingOverlay()
+        }
       } else {
         Column({ space: 0 }) {
           this.renderSettingsOverlay()
@@ -483,6 +487,47 @@ struct KeyboardPanel {
     .width('100%')
     .height('100%')
     .backgroundColor('#D9DCE2')
+  }
+
+  @Builder
+  private renderInputLoadingOverlay() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor('rgba(217,220,226,0.82)')
+
+      Column({ space: 10 }) {
+        LoadingProgress()
+          .width(32)
+          .height(32)
+          .color('#3478F6')
+
+        Text($r('app.string.ime_loading_input_engine'))
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#20242B')
+          .textAlign(TextAlign.Center)
+          .maxLines(1)
+      }
+      .width(168)
+      .height(92)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor('rgba(255,255,255,0.88)')
+      .border({ width: 1, color: '#EFF1F5' })
+      .borderRadius(14)
+      .shadow({
+        radius: 14,
+        color: '#18000000',
+        offsetX: 0,
+        offsetY: 6
+      })
+    }
+    .width('100%')
+    .height('100%')
+    .zIndex(30)
+    .hitTestBehavior(HitTestMode.Block)
   }
 
   @Builder

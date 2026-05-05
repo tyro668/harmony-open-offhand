@@ -37,19 +37,31 @@ export class RimeService {
   private initialized: boolean = false;
   private initSignature: string = '';
 
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
   initialize(options: RimeInitOptions): void {
     let nextSignature = `${options.sharedDataDir}|${options.userDataDir}|${options.resourceVersion ?? ''}`;
     if (this.initialized && this.initSignature === nextSignature) {
       return;
     }
+    let startMs = Date.now();
+    let initStartMs = startMs;
     let initStatus = bridge.init(options.sharedDataDir, options.userDataDir);
+    let initCostMs = Date.now() - initStartMs;
     hilog.info(DOMAIN, TAG, 'init status %{public}s', initStatus);
     this.ensureStatusOk(initStatus, 'init');
+    let deployStartMs = Date.now();
     let deployStatus = bridge.deployIfNeeded();
+    let deployCostMs = Date.now() - deployStartMs;
     hilog.info(DOMAIN, TAG, 'deploy status %{public}s', deployStatus);
     this.ensureStatusOk(deployStatus, 'deploy');
     this.initialized = true;
     this.initSignature = nextSignature;
+    hilog.info(DOMAIN, TAG,
+      'initialize completed initCost=%{public}dms deployCost=%{public}dms total=%{public}dms',
+      initCostMs, deployCostMs, Date.now() - startMs);
   }
 
   createSession(schemaId: string): string {

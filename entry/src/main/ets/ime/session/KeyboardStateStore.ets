@@ -9,6 +9,7 @@ import {
 
 export interface KeyboardUiState {
   isReady: boolean;
+  isInputLoading: boolean;
   sessionActive: boolean;
   statusText: string;
   editorSummary: string;
@@ -50,6 +51,7 @@ type KeyboardStateListener = (state: KeyboardUiState) => void;
 
 const DEFAULT_STATE: KeyboardUiState = {
   isReady: false,
+  isInputLoading: false,
   sessionActive: false,
   statusText: 'Preparing IME bootstrap',
   editorSummary: 'Not attached to an editor',
@@ -110,6 +112,9 @@ class KeyboardStateStore {
     let updatedState = cloneKeyboardUiState(this.state);
     if (nextState.isReady !== undefined) {
       updatedState.isReady = nextState.isReady;
+    }
+    if (nextState.isInputLoading !== undefined) {
+      updatedState.isInputLoading = nextState.isInputLoading;
     }
     if (nextState.sessionActive !== undefined) {
       updatedState.sessionActive = nextState.sessionActive;
@@ -259,6 +264,7 @@ class KeyboardStateStore {
   resetTransientState(): void {
     let updatedState = cloneKeyboardUiState(this.state);
     updatedState.sessionActive = false;
+    updatedState.isInputLoading = false;
     updatedState.statusText = this.state.isReady ? 'Waiting for inputStart' : DEFAULT_STATE.statusText;
     updatedState.editorSummary = DEFAULT_STATE.editorSummary;
     updatedState.securitySummary = DEFAULT_STATE.securitySummary;
@@ -304,6 +310,7 @@ export const keyboardStateStore: KeyboardStateStore = new KeyboardStateStore();
 function cloneKeyboardUiState(source: KeyboardUiState): KeyboardUiState {
   let state: KeyboardUiState = {
     isReady: source.isReady,
+    isInputLoading: source.isInputLoading,
     sessionActive: source.sessionActive,
     statusText: source.statusText,
     editorSummary: source.editorSummary,

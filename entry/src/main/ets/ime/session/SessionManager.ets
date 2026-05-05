@@ -69,6 +69,7 @@ export class SessionManager {
   private inputClient?: inputMethodEngine.InputClient;
   private editorAdapter?: EditorContextAdapter;
   private keyboardPanel?: inputMethodEngine.Panel;
+  private keyboardVisible: boolean = false;
   private currentSubtype?: OffhandSubtypeConfig;
   private currentKeyboardLayout: KeyboardLayoutId = 'qwerty_26';
   private letterCaseMode: LetterCaseMode = 'lower';
@@ -85,6 +86,7 @@ export class SessionManager {
   private lastAppliedPolish?: PolishSuggestion;
   private voiceAutoStopHandle?: VoiceAutoStopHandle;
   private pendingVoiceStartRequested: boolean = false;
+  private rimeSessionReadyPromise?: Promise<void>;
 
   constructor(
     configRepository: ConfigRepository,
@@ -182,6 +184,7 @@ export class SessionManager {
     }
     if (this.keyboardPanel) {
       await this.keyboardPanel.show();
+      this.keyboardVisible = true;
     }
     if (this.activeSessionContext && this.editorAdapter) {
       await this.refreshSessionContext('keyboardShow');
@@ -193,10 +196,12 @@ export class SessionManager {
   }
 
   async handleKeyboardHide(): Promise<void> {
+    this.keyboardVisible = false;
     if (this.keyboardPanel) {
       await this.keyboardPanel.hide();
     }
     keyboardStateStore.patch({
+      isInputLoading: false,
       statusText: 'Keyboard panel hidden'
     });
   }
@@ -1358,12 +1363,15 @@ export class SessionManager {
       this.syncNineKeyState(this.nineKeyEngine.reset());
       await this.syncPreviewText(englishState.composingText);
     } else if (this.currentSubtype.engine === 'librime') {
-      await this.ensureRimeSessionReady();
-      if (this.rimeSessionId.length > 0) {
-        let state = this.rimeService.getState(this.rimeSessionId);
-        this.updateCandidateState(state);
-        this.syncNineKeyStateFromRawInput(state.rawInput);
-        await this.syncPreviewText(state.composingText);
+      if (reason === 'inputStart') {
+        this.updateCandidateState(undefined);
+        this.syncNineKeyState(this.nineKeyEngine.reset());
+        await this.syncPreviewText('');
+        if (this.keyboardVisible) {
+          void this.prewarmRimeSession('inputStartVisible');
+        }
+      } else {
+        await this.prewarmRimeSession(reason);
       }
     } else if (this.rimeSessionId.length > 0) {
       this.rimeService.destroySession(this.rimeSessionId);
@@ -1391,10 +1399,42 @@ export class SessionManager {
     return `${options.ascii_mode ? 1 : 0}|${options.full_shape ? 1 : 0}|${options.emoji_suggestion === true ? 1 : options.emoji_suggestion === false ? 0 : 'u'}`;
   }
 
-  private async ensureRimeSessionReady(): Promise<void> {
+  private async prewarmRimeSession(reason: string): Promise<void> {
+    await this.ensureRimeSessionReady(true, reason);
+    if (this.rimeSessionId.length > 0) {
+      let state = this.rimeService.getState(this.rimeSessionId);
+      this.updateCandidateState(state);
+      this.syncNineKeyStateFromRawInput(state.rawInput);
+      await this.syncPreviewText(state.composingText);
+    }
+  }
+
+  private async ensureRimeSessionReady(showLoading: boolean = true, reason: string = 'ensureRimeSessionReady'): Promise<void> {
+    if (this.rimeSessionReadyPromise) {
+      await this.rimeSessionReadyPromise;
+      return;
+    }
+    this.rimeSessionReadyPromise = this.ensureRimeSessionReadyInternal(showLoading, reason);
+    try {
+      await this.rimeSessionReadyPromise;
+    } finally {
+      this.rimeSessionReadyPromise = undefined;
+    }
+  }
+
+  private async ensureRimeSessionReadyInternal(showLoading: boolean, reason: string): Promise<void> {
     if (!this.context || !this.currentSubtype) {
       return;
     }
+    let shouldShowLoading = showLoading && !this.rimeService.isInitialized();
+    if (shouldShowLoading) {
+      keyboardStateStore.patch({
+        isInputLoading: true,
+        statusText: `Loading input engine via ${reason}`
+      });
+      await this.delayForLoadingFrame();
+    }
+    let startMs = Date.now();
     try {
       let options = await this.configRepository.buildRimeInitOptions(this.context);
       hilog.info(
@@ -1445,12 +1485,26 @@ export class SessionManager {
         this.rimeService.applyOptions(this.rimeSessionId, options.options);
         this.appliedRimeOptionsSignature = optionsSignature;
       }
+      hilog.info(DOMAIN, TAG, 'ensureRimeSessionReady(%{public}s) completed cost=%{public}dms',
+        reason, Date.now() - startMs);
     } catch (error) {
       hilog.error(DOMAIN, TAG, 'Failed to initialize Rime session: %{public}s', JSON.stringify(error));
       keyboardStateStore.patch({
         statusText: 'Rime initialization failed'
       });
+    } finally {
+      if (shouldShowLoading) {
+        keyboardStateStore.patch({
+          isInputLoading: false
+        });
+      }
     }
+  }
+
+  private async delayForLoadingFrame(): Promise<void> {
+    await new Promise<void>((resolve): void => {
+      setTimeout(resolve, 48);
+    });
   }
 
   private async applyRimeState(state: RimeState, previousState?: RimeState): Promise<void> {

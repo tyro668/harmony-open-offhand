@@ -229,6 +229,10 @@
       "value": "Polishing"
     },
     {
+      "name": "ime_loading_input_engine",
+      "value": "Loading input engine..."
+    },
+    {
       "name": "ime_voice_status_idle",
       "value": "Voice input ready"
     },

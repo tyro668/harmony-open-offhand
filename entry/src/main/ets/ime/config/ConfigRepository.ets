@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import fileIo from '@ohos.file.fs';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { util } from '@kit.ArkTS';
 import { InputMethodExtensionContext } from '@kit.IMEKit';
 import {
@@ -33,6 +34,8 @@ interface SubtypeEnvelope {
 }
 
 const RIME_SHARED_RAWFILE_ROOT = 'rime/shared';
+const DOMAIN = 0xFF10;
+const TAG = 'ConfigRepository';
 // Bumped after 2026-04-22 fix that: (1) pre-simplifies essay.txt so candidates
 // no longer rely on opencc/simplifier (opencc data files are not shipped);
 // (2) drops the broken `simplifier` filter from the schema; (3) expands
@@ -167,6 +170,7 @@ export class ConfigRepository {
   }
 
   async buildRimeInitOptions(context: InputMethodExtensionContext): Promise<RimeInitOptions> {
+    let startMs = Date.now();
     let rime = this.config.pinyin.rime;
     let sharedDataDir = resolveAppPrivatePath(rime.sharedDataDir, context.filesDir, 'rime/shared');
     let userDataDir = resolveAppPrivatePath(rime.userDataDir, context.filesDir, 'rime/user');
@@ -183,12 +187,17 @@ export class ConfigRepository {
     // but the next cold start would be left with an empty `build/` directory
     // and a flag cache indicating "already deployed", so phrase candidates
     // (e.g. 季节/集结 for `jijie`) silently disappeared.
+    let prepared = false;
     if (preparedSignature !== signature || !hasRequiredRimeSharedFiles(sharedDataDir)) {
+      let prepareStartMs = Date.now();
       await this.prepareRimeSharedData(context, sharedDataDir);
       resetDirectoryContents(`${sharedDataDir}/build`);
       resetDirectoryContents(`${userDataDir}/build`);
       removeRecursively(`${userDataDir}/installation.yaml`);
       writeTextFile(preparedSignaturePath, signature);
+      prepared = true;
+      hilog.info(DOMAIN, TAG, 'prepareRimeSharedData cost=%{public}dms',
+        Date.now() - prepareStartMs);
     }
     this.lastPreparedSignature = signature;
     let options: RimeOptionState = cloneOptionState(rime.options);
@@ -199,6 +208,9 @@ export class ConfigRepository {
       options: options,
       resourceVersion: buildRimeResourceSignature(this.config)
     };
+    hilog.info(DOMAIN, TAG,
+      'buildRimeInitOptions prepared=%{public}s cost=%{public}dms',
+      prepared ? 'true' : 'false', Date.now() - startMs);
     return initOptions;
   }
 

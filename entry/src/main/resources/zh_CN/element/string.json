@@ -229,6 +229,10 @@
       "value": "润色中"
     },
     {
+      "name": "ime_loading_input_engine",
+      "value": "正在加载输入法..."
+    },
+    {
       "name": "ime_voice_status_idle",
       "value": "语音输入已就绪"
     },
