@@ -43,6 +43,7 @@ const TOP_ACCESSORY_HEIGHT: number = FEATURE_ROW_HEIGHT;
 const PANEL_TOP_PADDING: number = 4;
 const PANEL_BOTTOM_SAFE_GAP: number = 5;
 const CANDIDATE_TOOLBAR_OVERLAY_HEIGHT: number = FEATURE_ROW_HEIGHT;
+const CANDIDATE_SEPARATOR_SEGMENTS: number[] = [0, 1, 2, 3, 4, 5];
 // Expanded candidate board proportions are based on the 1080px reference
 // image, but applied as layout weights so the board scales with the actual
 // keyboard width instead of using screenshot pixels as vp values.
@@ -269,10 +270,12 @@ struct KeyboardPanel {
   @State private runtimeEnableCloudPolish: boolean = true;
   @State private runtimeAutoPolishVoiceResult: boolean = true;
   @State private runtimeSaveStatus: string = '';
+  @State private pendingQuickSubtypeId: string = '';
   private voicePulseTimer?: number;
   private qwertyLongPressSuppressTimer?: number;
   private backspaceRepeatTimer?: number;
   private backspaceLongPressSuppressTimer?: number;
+  private pendingQuickSubtypeClearTimer?: number;
   private suppressNextQwertyLetterClick: boolean = false;
   private suppressNextBackspaceClick: boolean = false;
   private unsubscribe?: () => void;
@@ -298,6 +301,9 @@ struct KeyboardPanel {
     this.unsubscribe = keyboardStateStore.subscribe((state: KeyboardUiState): void => {
       let previousExpandedCandidateInput = this.resolveExpandedCandidateInputSignature(this.uiState);
       this.uiState = state;
+      if (this.pendingQuickSubtypeId.length > 0 && state.currentSubtypeId === this.pendingQuickSubtypeId) {
+        this.clearPendingQuickSubtype();
+      }
       this.syncExpandedCandidatePageState(state, previousExpandedCandidateInput);
       if (state.keyboardLayout !== 'voice_panel') {
         this.lastNonVoiceSubtypeId = state.currentSubtypeId;
@@ -344,6 +350,7 @@ struct KeyboardPanel {
     this.clearQwertyLongPressSuppressTimer();
     this.stopBackspaceRepeat();
     this.clearBackspaceLongPressSuppressTimer();
+    this.clearPendingQuickSubtype();
   }
 
   private syncVoicePulseAnimation(state: KeyboardUiState): void {
@@ -1832,6 +1839,22 @@ struct KeyboardPanel {
   }
 
   @Builder
+  private renderCandidateToolbarSeparator() {
+    Column({ space: 3 }) {
+      ForEach(CANDIDATE_SEPARATOR_SEGMENTS, (segmentIndex: number) => {
+        Column()
+          .width(1)
+          .height(3)
+          .backgroundColor('rgba(95,99,108,0.28)')
+      }, (segmentIndex: number): string => `candidate-separator-${segmentIndex}`)
+    }
+    .width(10)
+    .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  @Builder
   private renderCandidateToolbarOverlay() {
     Column({ space: 0 }) {
       if (this.showSymbolPalette) {
@@ -1857,41 +1880,46 @@ struct KeyboardPanel {
         .width('100%')
         .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
       } else {
-        Row({ space: 10 }) {
+        Row({ space: 0 }) {
           if (this.resolveInlinePinyinText().length > 0) {
             Text(this.resolveInlinePinyinText())
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor('#111214')
               .width(112)
-              .height(34)
-              .padding({ left: 10, right: 10 })
+              .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
+              .padding({ left: 8, right: 8 })
               .textAlign(TextAlign.Center)
-              .backgroundColor('#FFFFFF')
-              .border({ width: 1, color: '#F6F7F9' })
-              .borderRadius(9)
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+            this.renderCandidateToolbarSeparator()
           }
 
           Scroll() {
-            Row({ space: 22 }) {
+            Row({ space: 0 }) {
               if (this.uiState.candidates.length === 0) {
                 Text(this.resolveCandidatePlaceholder())
                   .fontSize(15)
                   .fontWeight(FontWeight.Normal)
                   .fontColor('#8C9098')
+                  .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
+                  .padding({ left: 10, right: 10 })
+                  .textAlign(TextAlign.Center)
                   .maxLines(1)
               } else {
                 ForEach(this.uiState.candidates, (candidate: CandidateItem) => {
+                  if (candidate.index > 0) {
+                    this.renderCandidateToolbarSeparator()
+                  }
+
                   Text(candidate.text)
                     .fontSize(15)
                     .fontWeight(FontWeight.Normal)
                     .fontColor(candidate.index === 0 ? '#1677FF' : '#111214')
-                    .height(34)
-                    .padding({ left: candidate.index === 0 ? 14 : 0, right: candidate.index === 0 ? 14 : 0 })
-                    .backgroundColor(candidate.index === 0 ? '#FFFFFF' : 'rgba(0,0,0,0)')
-                    .borderRadius(9)
+                    .height(CANDIDATE_TOOLBAR_OVERLAY_HEIGHT)
+                    .padding({ left: 10, right: 10 })
+                    .textAlign(TextAlign.Center)
                     .maxLines(1)
                     .constraintSize({ maxWidth: 92 })
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -2490,15 +2518,11 @@ struct KeyboardPanel {
           this.switchQuickSubtype();
         }, false, QWERTY_BOTTOM_QUICK_WEIGHT)
 
-        this.renderReferenceQwertyPunctuationKey(this.resolveQwertyCommaLabel(), (): void => {
-          void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyCommaOutput());
-        }, QWERTY_BOTTOM_PUNCTUATION_WEIGHT)
+        this.renderReferenceQwertyPunctuationKey('comma', QWERTY_BOTTOM_PUNCTUATION_WEIGHT)
 
         this.renderReferenceQwertySpaceKey(QWERTY_BOTTOM_SPACE_WEIGHT)
 
-        this.renderReferenceQwertyPunctuationKey(this.resolveQwertyPeriodLabel(), (): void => {
-          void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyPeriodOutput());
-        }, QWERTY_BOTTOM_PUNCTUATION_WEIGHT)
+        this.renderReferenceQwertyPunctuationKey('period', QWERTY_BOTTOM_PUNCTUATION_WEIGHT)
 
         this.renderReferenceQwertyBottomActionKey('123', (): void => {
           this.openSymbolKeyboard('number');
@@ -2966,7 +2990,7 @@ struct KeyboardPanel {
           .hitTestBehavior(HitTestMode.Transparent)
       }
 
-      this.renderVoicePanelBackspaceButton()
+      this.renderVoicePanelActionButtons()
     }
     .width('100%')
     .layoutWeight(1)
@@ -3041,41 +3065,70 @@ struct KeyboardPanel {
   }
 
   @Builder
-  private renderVoicePanelBackspaceButton() {
+  private renderVoicePanelActionButtons() {
     Column() {
-      Button() {
-        this.renderIconAsset('backspace', this.resolveVoiceScaledSize(30), this.resolveVoiceScaledSize(23))
+      Row() {
+        Button() {
+          Text('清空')
+            .fontSize(this.resolveVoiceScaledSize(13))
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#24304A')
+            .textAlign(TextAlign.Center)
+            .maxLines(1)
+        }
+        .width(this.resolveVoiceScaledSize(72))
+        .height(this.resolveVoiceScaledSize(42))
+        .type(ButtonType.Normal)
+        .backgroundColor('rgba(255,255,255,0.34)')
+        .border({ width: 2, color: 'rgba(255,255,255,0.64)' })
+        .borderRadius(this.resolveVoiceScaledSize(21))
+        .shadow({
+          radius: 8,
+          color: '#16000000',
+          offsetX: 0,
+          offsetY: 4
+        })
+        .onClick(() => {
+          void imeRuntime.getSessionManager()?.clearEditorText();
+        })
+
+        Button() {
+          this.renderIconAsset('backspace', this.resolveVoiceScaledSize(30), this.resolveVoiceScaledSize(23))
+        }
+        .width(this.resolveVoiceScaledSize(72))
+        .height(this.resolveVoiceScaledSize(42))
+        .type(ButtonType.Normal)
+        .backgroundColor('rgba(255,255,255,0.34)')
+        .border({ width: 2, color: 'rgba(255,255,255,0.64)' })
+        .borderRadius(this.resolveVoiceScaledSize(21))
+        .shadow({
+          radius: 8,
+          color: '#16000000',
+          offsetX: 0,
+          offsetY: 4
+        })
+        .onClick(() => {
+          this.handleBackspaceClick();
+        })
+        .gesture(
+          LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+            .onAction(() => {
+              this.startBackspaceRepeat();
+            })
+            .onActionEnd(() => {
+              this.finishBackspaceRepeat();
+            })
+        )
       }
-      .width(this.resolveVoiceScaledSize(72))
-      .height(this.resolveVoiceScaledSize(42))
-      .type(ButtonType.Normal)
-      .backgroundColor('rgba(255,255,255,0.34)')
-      .border({ width: 2, color: 'rgba(255,255,255,0.64)' })
-      .borderRadius(this.resolveVoiceScaledSize(21))
-      .shadow({
-        radius: 8,
-        color: '#16000000',
-        offsetX: 0,
-        offsetY: 4
-      })
-      .onClick(() => {
-        this.handleBackspaceClick();
-      })
-      .gesture(
-        LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
-          .onAction(() => {
-            this.startBackspaceRepeat();
-          })
-          .onActionEnd(() => {
-            this.finishBackspaceRepeat();
-          })
-      )
+      .width('100%')
+      .justifyContent(FlexAlign.SpaceBetween)
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
     .height('100%')
-    .padding({ right: 18, bottom: 14 })
+    .padding({ left: 18, right: 18, bottom: 14 })
     .justifyContent(FlexAlign.End)
-    .alignItems(HorizontalAlign.End)
+    .alignItems(HorizontalAlign.Center)
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
@@ -3848,17 +3901,16 @@ struct KeyboardPanel {
 
   @Builder
   private renderReferenceQwertyPunctuationKey(
-    label: string,
-    action: () => void,
+    kind: string,
     weight: number = 0.76
   ) {
     Column({ space: 0 }) {
-      Text(label === this.resolveQwertyCommaLabel() ? '!' : '?')
+      Text(this.resolveQwertyPunctuationSecondaryLabel(kind))
         .fontSize(9)
         .fontColor('#8F9299')
         .textAlign(TextAlign.Center)
 
-      Text(label)
+      Text(this.resolveQwertyPunctuationLabel(kind))
         .fontSize(20)
         .minFontSize(12)
         .maxFontSize(20)
@@ -3878,7 +3930,7 @@ struct KeyboardPanel {
     .shadow(this.resolveQwertyWhiteKeyShadow())
     .stateStyles({ pressed: this.pressedWhiteKeyStyle })
     .onClick(() => {
-      action();
+      void imeRuntime.getSessionManager()?.insertPunctuation(this.resolveQwertyPunctuationOutput(kind));
     })
   }
 
@@ -4155,6 +4207,26 @@ struct KeyboardPanel {
 
   private resolveQwertyPeriodOutput(): string {
     return this.isEnglishPunctuationMode() ? '.' : '。';
+  }
+
+  private resolveQwertyPunctuationLabel(kind: string): string {
+    return kind === 'comma' ? this.resolveQwertyCommaLabel() : this.resolveQwertyPeriodLabel();
+  }
+
+  private resolveQwertyPunctuationOutput(kind: string): string {
+    return kind === 'comma' ? this.resolveQwertyCommaOutput() : this.resolveQwertyPeriodOutput();
+  }
+
+  private resolveQwertyPunctuationSecondaryLabel(kind: string): string {
+    return kind === 'comma' ? this.resolveQwertyCommaSecondaryLabel() : this.resolveQwertyPeriodSecondaryLabel();
+  }
+
+  private resolveQwertyCommaSecondaryLabel(): string {
+    return this.isEnglishPunctuationMode() ? '!' : '！';
+  }
+
+  private resolveQwertyPeriodSecondaryLabel(): string {
+    return this.isEnglishPunctuationMode() ? '?' : '？';
   }
 
   private resolveSidePunctuations(): string[] {
@@ -4468,14 +4540,17 @@ struct KeyboardPanel {
   }
 
   private isEnglishSubtype(): boolean {
+    if (this.pendingQuickSubtypeId.length > 0) {
+      return this.pendingQuickSubtypeId.startsWith('en-');
+    }
     return this.uiState.currentSubtypeId.startsWith('en-');
   }
 
   private isEnglishPunctuationMode(): boolean {
-    if (this.uiState.currentSubtypeId.length > 0) {
-      return this.isEnglishSubtype();
+    if (this.pendingQuickSubtypeId.length > 0) {
+      return this.pendingQuickSubtypeId.startsWith('en-');
     }
-    return this.uiState.punctuationMode === 'en';
+    return this.uiState.punctuationMode === 'en' || this.isEnglishSubtype();
   }
 
   private switchQuickSubtype(): void {
@@ -4483,6 +4558,7 @@ struct KeyboardPanel {
     if (targetSubtype.length === 0) {
       return;
     }
+    this.setPendingQuickSubtype(targetSubtype);
     void this.switchSubtypeWithKeyboardLayoutAsync(
       targetSubtype,
       this.resolvePreferredKeyboardLayoutForSubtype(targetSubtype)
@@ -4498,6 +4574,7 @@ struct KeyboardPanel {
     if (targetSubtype.length === 0) {
       return;
     }
+    this.clearPendingQuickSubtype();
     void this.switchSubtypeWithKeyboardLayoutAsync(
       targetSubtype,
       this.resolvePreferredKeyboardLayoutForSubtype(targetSubtype)
@@ -4510,8 +4587,26 @@ struct KeyboardPanel {
     if (targetSubtype.length === 0) {
       targetSubtype = 'zh-CN-voice';
     }
+    this.clearPendingQuickSubtype();
     await this.switchSubtypeWithKeyboardLayoutAsync(targetSubtype, 'voice_panel');
     this.closeSettingsOverlay();
+  }
+
+  private setPendingQuickSubtype(subtypeId: string): void {
+    this.clearPendingQuickSubtype();
+    this.pendingQuickSubtypeId = subtypeId;
+    this.pendingQuickSubtypeClearTimer = setTimeout((): void => {
+      this.pendingQuickSubtypeId = '';
+      this.pendingQuickSubtypeClearTimer = undefined;
+    }, 1200);
+  }
+
+  private clearPendingQuickSubtype(): void {
+    this.pendingQuickSubtypeId = '';
+    if (this.pendingQuickSubtypeClearTimer !== undefined) {
+      clearTimeout(this.pendingQuickSubtypeClearTimer);
+      this.pendingQuickSubtypeClearTimer = undefined;
+    }
   }
 
   private async switchSubtypeWithKeyboardLayoutAsync(

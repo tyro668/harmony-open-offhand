@@ -142,6 +142,7 @@ export class VoiceCaptureService {
   private captureStartedAtMs: number = 0;
   private effectiveCaptureSampleRate: number = 16000;
   private lastReadDataLogAtMs: number = 0;
+  private sessionGeneration: number = 0;
 
   private readonly onReadData = (buffer: ArrayBuffer): void => {
     if (!this.state.active) {
@@ -185,6 +186,8 @@ export class VoiceCaptureService {
       hilog.warn(0xFF10, 'VoiceCaptureService', 'start called but already active');
       return;
     }
+    this.sessionGeneration += 1;
+    let sessionGeneration = this.sessionGeneration;
     this.resetChunks();
     this.asrResultText = '';
     this.asrFinalizedText = '';
@@ -216,9 +219,11 @@ export class VoiceCaptureService {
     // 优先创建并启动 AudioCapturer，减少用户感知的点击-录音延时
     hilog.info(0xFF10, 'VoiceCaptureService',
       'creating AudioCapturer with sampleRate=%{public}d', captureSampleRate);
+    let capturer: audio.AudioCapturer;
     try {
-      this.capturer = await this.createCapturerWithFallback(sampleRate);
-      this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(this.capturer, 'created'));
+      capturer = await this.createCapturerWithFallback(sampleRate);
+      this.capturer = capturer;
+      this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(capturer, 'created'));
     } catch (error) {
       let errorMsg = (error as Error).message ?? String(error);
       hilog.error(0xFF10, 'VoiceCaptureService', 'createAudioCapturer failed: %{public}s', errorMsg);
@@ -227,35 +232,44 @@ export class VoiceCaptureService {
       throw new Error(
         `音频录制初始化失败(${errorMsg})，鸿蒙模拟器不支持麦克风，请在真机上测试。`);
     }
-    this.capturer.on('readData', this.onReadData);
+    capturer.on('readData', this.onReadData);
     hilog.info(0xFF10, 'VoiceCaptureService', 'starting AudioCapturer...');
     this.state.active = true;
     this.state.startedAt = Date.now();
     this.captureStartedAtMs = this.state.startedAt;
     try {
-      await this.capturer.start();
+      await capturer.start();
     } catch (error) {
       let errorMsg = (error as Error).message ?? String(error);
       hilog.error(0xFF10, 'VoiceCaptureService', 'capturer.start failed: %{public}s', errorMsg);
-      this.capturer.off('readData', this.onReadData);
-      await this.capturer.release();
-      this.capturer = undefined;
+      capturer.off('readData', this.onReadData);
+      await capturer.release();
+      if (this.capturer === capturer) {
+        this.capturer = undefined;
+      }
       this.shutdownBuiltinAsr();
       await this.shutdownLocalAsr();
       this.state.active = false;
       throw new Error(errorMsg);
     }
+    if (!this.state.active || this.capturer !== capturer) {
+      hilog.info(0xFF10, 'VoiceCaptureService', 'AudioCapturer start completed after cancellation');
+      return;
+    }
     hilog.info(0xFF10, 'VoiceCaptureService', 'AudioCapturer started successfully');
-    this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(this.capturer, 'started'));
+    this.updateLocalAsrSampleRateIfNeeded(this.logCapturerStreamInfo(capturer, 'started'));
 
     // 麦克风开启后立即返回；ASR 初始化在后台进行，期间捕获到的音频会在
     // ASR 就绪后补推，避免把模型/系统引擎启动时间暴露给录音按钮。
-    this.asrInitializationPromise = this.initializeAsrAfterCaptureStart(config, locale, providerId);
+    this.asrInitializationPromise = this.initializeAsrAfterCaptureStart(config, locale, providerId, sessionGeneration);
     void this.asrInitializationPromise;
   }
 
-  async stop(config: OffhandVoiceConfig, locale: string): Promise<VoiceRecognitionResult> {
+  async stop(config: OffhandVoiceConfig, locale: string, discardResult: boolean = false): Promise<VoiceRecognitionResult> {
     if (!this.state.active || !this.capturer) {
+      if (discardResult) {
+        return this.discardRecognitionSession();
+      }
       return this.resolveBuiltinAsrResult(config);
     }
     let capturer = this.capturer;
@@ -279,6 +293,10 @@ export class VoiceCaptureService {
         (error as Error).message ?? String(error));
     }
     this.capturer = undefined;
+
+    if (discardResult) {
+      return this.discardRecognitionSession();
+    }
 
     await this.waitForAsrInitialization();
 
@@ -370,6 +388,38 @@ export class VoiceCaptureService {
     return Date.now() - this.state.startedAt;
   }
 
+  private async discardRecognitionSession(): Promise<VoiceRecognitionResult> {
+    this.sessionGeneration += 1;
+    let source: 'remote_asr' | 'builtin_asr' | 'sensevoice_local' | 'mock' = 'mock';
+    if (this.useLocalAsr || this.localAsrProvider) {
+      source = 'sensevoice_local';
+      let provider = this.localAsrProvider;
+      this.useLocalAsr = false;
+      this.localAsrProvider = undefined;
+      if (provider) {
+        try {
+          await provider.stop(true);
+        } catch (_) {
+          await provider.destroy();
+        }
+      }
+    }
+    if (this.useBuiltinAsr || this.asrEngine) {
+      source = 'builtin_asr';
+      this.shutdownBuiltinAsr();
+    } else {
+      this.resetBuiltinAsrSessionState();
+    }
+    this.asrResultText = '';
+    this.asrFinalizedText = '';
+    this.pendingBuiltinAudio = new Uint8Array(0);
+    this.resetChunks();
+    return {
+      text: '',
+      source: source
+    };
+  }
+
   setTranscriptListener(callback?: (text: string) => void): void {
     this.onTranscriptUpdate = callback;
   }
@@ -431,10 +481,10 @@ export class VoiceCaptureService {
   }
 
   private async initializeAsrAfterCaptureStart(config: OffhandVoiceConfig, locale: string,
-    providerId: VoiceAsrProviderId): Promise<void> {
+    providerId: VoiceAsrProviderId, sessionGeneration: number): Promise<void> {
     try {
-      let localStarted = await this.tryStartLocalAsr(config, locale, providerId);
-      if (!this.state.active) {
+      let localStarted = await this.tryStartLocalAsr(config, locale, providerId, sessionGeneration);
+      if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
         if (localStarted) {
           await this.shutdownLocalAsr();
         }
@@ -447,8 +497,9 @@ export class VoiceCaptureService {
 
       // 自动/内置模式下当前语言为中文时，尝试使用系统内置 ASR。
       if (this.shouldTryBuiltinAsr(providerId) && this.isLocaleSupportedByBuiltinAsr(locale)) {
-        await this.initBuiltinAsr(config, locale);
-        if (!this.state.active) {
+        await this.initBuiltinAsr(config, locale, sessionGeneration);
+        if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
+          this.shutdownBuiltinAsr();
           return;
         }
         this.useBuiltinAsr = true;
@@ -511,7 +562,7 @@ export class VoiceCaptureService {
   }
 
   private async tryStartLocalAsr(config: OffhandVoiceConfig, locale: string,
-    providerId: VoiceAsrProviderId): Promise<boolean> {
+    providerId: VoiceAsrProviderId, sessionGeneration: number): Promise<boolean> {
     if (providerId !== 'auto' && providerId !== 'sensevoice_local') {
       return false;
     }
@@ -519,6 +570,12 @@ export class VoiceCaptureService {
     provider.setContext(this.runtimeContext);
     this.localAsrProvider = provider;
     let available = await provider.isAvailable(config, locale);
+    if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
+      if (this.localAsrProvider === provider) {
+        this.localAsrProvider = undefined;
+      }
+      return false;
+    }
     if (!available) {
       let reason = provider.getUnavailableReason();
       if (providerId === 'sensevoice_local') {
@@ -532,6 +589,14 @@ export class VoiceCaptureService {
     });
     try {
       await provider.start(config, locale, listener);
+      if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
+        await provider.destroy();
+        if (this.localAsrProvider === provider) {
+          this.localAsrProvider = undefined;
+        }
+        this.useLocalAsr = false;
+        return false;
+      }
       this.useLocalAsr = true;
       hilog.info(0xFF10, 'VoiceCaptureService', 'local SenseVoice ASR initialized for %{public}s', locale);
       return true;
@@ -545,6 +610,10 @@ export class VoiceCaptureService {
         (error as Error).message ?? String(error));
       return false;
     }
+  }
+
+  private isCurrentSession(sessionGeneration: number): boolean {
+    return sessionGeneration === this.sessionGeneration;
   }
 
   private async shutdownLocalAsr(): Promise<void> {
@@ -659,9 +728,12 @@ export class VoiceCaptureService {
     return undefined;
   }
 
-  private async initBuiltinAsr(config: OffhandVoiceConfig, locale: string): Promise<void> {
+  private async initBuiltinAsr(config: OffhandVoiceConfig, locale: string, sessionGeneration: number): Promise<void> {
     // 动态导入 @kit.CoreSpeechKit，避免在旧设备上因模块不存在导致启动崩溃
     try {
+      if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
+        return;
+      }
       let canReuseEngine = this.asrEngine !== undefined &&
         this.asrLanguage === locale &&
         this.asrSampleRate === config.sampleRate;
@@ -670,6 +742,9 @@ export class VoiceCaptureService {
           this.shutdownBuiltinAsr();
         }
         let recognizerApi = await this.loadSpeechRecognizerApi();
+        if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
+          return;
+        }
         let createEngineCandidates = this.resolveBuiltinAsrCreateEngineCandidates(locale);
         let createEngineErrors: string[] = [];
         for (let index = 0; index < createEngineCandidates.length; index++) {
@@ -678,7 +753,15 @@ export class VoiceCaptureService {
             hilog.info(0xFF10, 'VoiceCaptureService',
               'trying builtin ASR createEngine language=%{public}s online=%{public}d',
               createEngineParams.language, createEngineParams.online);
-            this.asrEngine = await recognizerApi.createEngine(createEngineParams);
+            let createdEngine = await recognizerApi.createEngine(createEngineParams);
+            if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
+              try {
+                createdEngine.shutdown?.();
+              } catch (_) {
+              }
+              return;
+            }
+            this.asrEngine = createdEngine;
             break;
           } catch (error) {
             let errorMsg = (error as Error).message ?? String(error);
@@ -698,6 +781,9 @@ export class VoiceCaptureService {
           'reusing builtin ASR engine language=%{public}s sampleRate=%{public}d', locale, config.sampleRate);
       }
 
+      if (!this.state.active || !this.isCurrentSession(sessionGeneration)) {
+        return;
+      }
       this.asrSessionId = `voice-${Date.now()}`;
       this.asrResultText = '';
       this.asrFinalizedText = '';

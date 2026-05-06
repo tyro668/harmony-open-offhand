@@ -1,6 +1,7 @@
 import { Want } from '@kit.AbilityKit';
 import { InputMethodExtensionAbility, InputMethodSubtype, inputMethodEngine } from '@kit.IMEKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import commonEventManager from '@ohos.commonEventManager';
 import display from '@ohos.display';
 import { ConfigRepository } from '../config/ConfigRepository';
 import { RimeService } from '../engine/rime/RimeService';
@@ -39,6 +40,8 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   private bootstrapPromise?: Promise<void>;
   private displayChangeRegistered: boolean = false;
   private eventsRegistered: boolean = false;
+  private screenEventSubscriber?: commonEventManager.CommonEventSubscriber;
+  private screenEventRegistered: boolean = false;
 
   private readonly onInputStart = (keyboardController: inputMethodEngine.KeyboardController,
     inputClient: inputMethodEngine.InputClient): void => {
@@ -92,12 +95,14 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
     this.inputMethodAbility = inputMethodEngine.getInputMethodAbility();
     imeRuntime.setSessionManager(this.sessionManager);
     this.registerEvents();
+    void this.registerScreenEventListener();
     this.bootstrapPromise = this.bootstrap();
   }
 
   onDestroy(): void {
     this.unregisterEvents();
     this.unregisterDisplayChangeListener();
+    this.unregisterScreenEventListener();
     this.sessionManager.dispose();
     hilog.info(DOMAIN, TAG, 'Input method extension destroyed');
   }
@@ -236,15 +241,62 @@ export default class OffhandInputMethodExtensionAbility extends InputMethodExten
   }
 
   private readonly onDisplayChange = (_: number): void => {
-    if (!this.keyboardPanel) {
-      return;
-    }
     void this.runTask('displayChange', async (): Promise<void> => {
+      if (this.isDefaultDisplayOff()) {
+        await this.sessionManager.handleExternalVoiceCancel('displayOff');
+        return;
+      }
       if (this.keyboardPanel) {
         await this.applyKeyboardPanelSize(this.keyboardPanel);
       }
     });
   };
+
+  private async registerScreenEventListener(): Promise<void> {
+    if (this.screenEventRegistered || this.screenEventSubscriber) {
+      return;
+    }
+    try {
+      let subscriber = await commonEventManager.createSubscriber({
+        events: [commonEventManager.Support.COMMON_EVENT_SCREEN_OFF]
+      });
+      commonEventManager.subscribe(subscriber, (error, data): void => {
+        if (error) {
+          hilog.warn(DOMAIN, TAG, 'screen event callback error: %{public}s', JSON.stringify(error));
+          return;
+        }
+        if (data.event === commonEventManager.Support.COMMON_EVENT_SCREEN_OFF) {
+          void this.runTask('screenOff', async (): Promise<void> => {
+            await this.sessionManager.handleExternalVoiceCancel('screenOff');
+          });
+        }
+      });
+      this.screenEventSubscriber = subscriber;
+      this.screenEventRegistered = true;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Failed to register screen event listener: %{public}s', JSON.stringify(error));
+    }
+  }
+
+  private unregisterScreenEventListener(): void {
+    if (!this.screenEventSubscriber || !this.screenEventRegistered) {
+      return;
+    }
+    try {
+      commonEventManager.unsubscribe(this.screenEventSubscriber);
+    } catch (_) {
+    }
+    this.screenEventSubscriber = undefined;
+    this.screenEventRegistered = false;
+  }
+
+  private isDefaultDisplayOff(): boolean {
+    try {
+      return display.getDefaultDisplaySync().state === display.DisplayState.STATE_OFF;
+    } catch (_) {
+      return false;
+    }
+  }
 
   private registerEvents(): void {
     if (this.eventsRegistered) {

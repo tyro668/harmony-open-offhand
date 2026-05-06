@@ -62,6 +62,16 @@ export class EnglishEngine {
     return this.snapshot(`${selected} `);
   }
 
+  processPunctuation(text: string, autoCapitalize: boolean): EnglishEngineState {
+    if (text.length === 0) {
+      return this.snapshot('');
+    }
+    let selected = this.rawInput.length > 0 ? this.resolveSelectedWord(autoCapitalize) : '';
+    this.rawInput = '';
+    this.capitalizeNext = isSentenceEndingPunctuation(text);
+    return this.snapshot(`${selected}${text}`);
+  }
+
   processEnter(autoCapitalize: boolean): EnglishEngineState {
     if (this.rawInput.length === 0) {
       this.capitalizeNext = true;
@@ -191,4 +201,8 @@ function isAllUppercaseLetters(value: string): boolean {
 
 function startsWithUppercaseLetter(value: string): boolean {
   return /^[A-Z]/.test(value);
+}
+
+function isSentenceEndingPunctuation(value: string): boolean {
+  return value === '.' || value === '!' || value === '?';
 }

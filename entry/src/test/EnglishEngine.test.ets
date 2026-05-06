@@ -15,6 +15,17 @@ export default function englishEngineTest() {
       expect(state.commitText).assertEqual('AB ');
     });
 
+    it('commitsPunctuationWithoutImplicitSpace', 0, () => {
+      let engine = new EnglishEngine();
+      let state = engine.typeText('A', false);
+      state = engine.typeText('B', false);
+      state = engine.processPunctuation('.', false);
+
+      expect(state.commitText).assertEqual('AB.');
+      expect(state.composingText).assertEqual('');
+      expect(state.candidates.length).assertEqual(0);
+    });
+
     it('keepsAutoCapitalizeForLowercaseInput', 0, () => {
       let engine = new EnglishEngine();
       let state = engine.typeText('h', true);

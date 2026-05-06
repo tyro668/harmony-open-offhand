@@ -1,5 +1,6 @@
 import { InputMethodExtensionContext, InputMethodSubtype, inputMethodEngine } from '@kit.IMEKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import windowManager from '@ohos.window';
 import {
   InputSessionContext,
   KeyboardLayoutId,
@@ -87,6 +88,10 @@ export class SessionManager {
   private voiceAutoStopHandle?: VoiceAutoStopHandle;
   private pendingVoiceStartRequested: boolean = false;
   private rimeSessionReadyPromise?: Promise<void>;
+  private voiceStartInProgress: boolean = false;
+  private voiceLifecycleCancelRequested: boolean = false;
+  private voiceStopPromise?: Promise<void>;
+  private voiceKeepScreenOnActive: boolean = false;
 
   constructor(
     configRepository: ConfigRepository,
@@ -196,6 +201,7 @@ export class SessionManager {
   }
 
   async handleKeyboardHide(): Promise<void> {
+    await this.handleExternalVoiceCancel('keyboardHide');
     this.keyboardVisible = false;
     if (this.keyboardPanel) {
       await this.keyboardPanel.hide();
@@ -204,6 +210,21 @@ export class SessionManager {
       isInputLoading: false,
       statusText: 'Keyboard panel hidden'
     });
+  }
+
+  async handleExternalVoiceCancel(reason: string): Promise<void> {
+    this.pendingVoiceStartRequested = false;
+    let shouldCancelVoice = this.voiceCaptureService.isRecording() || this.voiceStartInProgress || this.voiceStopPromise !== undefined;
+    this.voiceLifecycleCancelRequested = shouldCancelVoice;
+    if (shouldCancelVoice) {
+      hilog.info(DOMAIN, TAG, 'Canceling voice input via %{public}s', reason);
+      await this.stopVoiceInput(true);
+      keyboardStateStore.patch({
+        statusText: `Voice capture canceled via ${reason}`
+      });
+      return;
+    }
+    await this.setVoiceKeepScreenOn(false);
   }
 
   // Snapshot of the runtime settings so the in-keyboard configuration panel
@@ -514,11 +535,14 @@ export class SessionManager {
     if (!this.editorAdapter || text.length === 0) {
       return;
     }
+    if (this.shouldUseEnglishEngine()) {
+      this.clearRollbackState();
+      this.invalidatePolishActions();
+      await this.applyEnglishState(this.englishEngine.processPunctuation(text, this.shouldAutoCapitalizeEnglish()));
+      return;
+    }
     if (this.rimeSessionId.length > 0) {
       await this.finalizePendingRimeComposition();
-    }
-    if (this.shouldUseEnglishEngine() && this.englishEngine.hasComposition()) {
-      await this.applyEnglishState(this.englishEngine.processSpace(this.shouldAutoCapitalizeEnglish()));
     }
     this.clearRollbackState();
     this.invalidatePolishActions();
@@ -662,7 +686,10 @@ export class SessionManager {
     this.invalidatePolishActions();
     let previousState = this.rimeService.getState(this.rimeSessionId);
     let state = this.rimeService.selectCandidate(this.rimeSessionId, index);
-    await this.applyRimeState(state, previousState);
+    if (state.commitText.length > 0) {
+      state = this.clearRimeCompositionAfterCandidateCommit(state);
+    }
+    await this.applyRimeState(state, previousState, false);
     void ImeTelemetry.trackBehavior('rime_candidate_select', `index=${index};pageNo=${previousState.pageNo}`);
   }
 
@@ -705,6 +732,22 @@ export class SessionManager {
   }
 
   async startVoiceInput(): Promise<void> {
+    if (this.voiceStopPromise) {
+      await this.voiceStopPromise;
+    }
+    if (this.voiceStartInProgress) {
+      return;
+    }
+    this.voiceStartInProgress = true;
+    this.voiceLifecycleCancelRequested = false;
+    try {
+      await this.startVoiceInputInternal();
+    } finally {
+      this.voiceStartInProgress = false;
+    }
+  }
+
+  private async startVoiceInputInternal(): Promise<void> {
     if (!this.currentSubtype) {
       this.pendingVoiceStartRequested = false;
       keyboardStateStore.patch({
@@ -725,6 +768,10 @@ export class SessionManager {
           statusText: 'Refreshing session for voice input'
         });
         await this.refreshSessionContext('voiceStart');
+        if (this.voiceLifecycleCancelRequested) {
+          this.resetVoiceState();
+          return;
+        }
       }
     }
     if (!this.activeCapabilities) {
@@ -780,7 +827,17 @@ export class SessionManager {
       void ImeTelemetry.trackBehavior('voice_permission_denied');
       return;
     }
+    if (this.voiceLifecycleCancelRequested) {
+      this.resetVoiceState();
+      return;
+    }
     try {
+      await this.setVoiceKeepScreenOn(true);
+      if (this.voiceLifecycleCancelRequested) {
+        await this.setVoiceKeepScreenOn(false);
+        this.resetVoiceState();
+        return;
+      }
       this.voiceCaptureService.setRuntimeContext(this.context);
       // Built-in ASRKit keeps transcript callbacks internal and only surfaces
       // text after stop(); this listener remains for providers that emit a
@@ -792,6 +849,10 @@ export class SessionManager {
         });
       });
       await this.voiceCaptureService.start(voiceConfig, this.currentSubtype.locale);
+      if (this.voiceLifecycleCancelRequested) {
+        await this.stopVoiceInput(true);
+        return;
+      }
       this.startVoiceAutoStopTimer(voiceConfig.maxRecordSeconds);
       keyboardStateStore.patch({
         voiceState: 'recording',
@@ -807,11 +868,29 @@ export class SessionManager {
         voiceStatusText: 'voice.failed',
         statusText: 'Voice capture unavailable'
       });
+      await this.setVoiceKeepScreenOn(false);
     }
   }
 
   async stopVoiceInput(discardResult: boolean = false): Promise<void> {
+    if (this.voiceStopPromise) {
+      await this.voiceStopPromise;
+      return;
+    }
+    this.voiceStopPromise = this.stopVoiceInputInternal(discardResult);
+    try {
+      await this.voiceStopPromise;
+    } finally {
+      this.voiceStopPromise = undefined;
+      await this.setVoiceKeepScreenOn(false);
+      this.voiceCaptureService.setTranscriptListener(undefined);
+    }
+  }
+
+  private async stopVoiceInputInternal(discardResult: boolean = false): Promise<void> {
     if (!this.currentSubtype) {
+      this.clearVoiceAutoStopTimer();
+      this.resetVoiceState();
       return;
     }
     this.clearVoiceAutoStopTimer();
@@ -823,7 +902,7 @@ export class SessionManager {
       statusText: discardResult ? 'Voice stopping' : 'Voice processing'
     });
     try {
-      let result = await this.voiceCaptureService.stop(voiceConfig, this.currentSubtype.locale);
+      let result = await this.voiceCaptureService.stop(voiceConfig, this.currentSubtype.locale, discardResult);
       if (discardResult) {
         this.resetVoiceState();
         void ImeTelemetry.trackBehavior('voice_cancel', `durationMs=${durationMs}`);
@@ -1507,7 +1586,8 @@ export class SessionManager {
     });
   }
 
-  private async applyRimeState(state: RimeState, previousState?: RimeState): Promise<void> {
+  private async applyRimeState(state: RimeState, previousState?: RimeState,
+    shouldSaveRollback: boolean = true): Promise<void> {
     hilog.info(
       DOMAIN,
       TAG,
@@ -1518,7 +1598,7 @@ export class SessionManager {
       state.candidates.length > 0 ? state.candidates[0].text : ''
     );
     if (state.commitText.length > 0 && this.editorAdapter) {
-      if (previousState && previousState.rawInput.length > 0) {
+      if (shouldSaveRollback && previousState && previousState.rawInput.length > 0) {
         this.pendingRollback = {
           rawInput: previousState.rawInput,
           committedText: state.commitText,
@@ -1555,6 +1635,27 @@ export class SessionManager {
       statusText: state.commitText.length > 0 ? 'Committed English text' :
         state.composingText.length > 0 ? `Composing ${state.composingText}` : 'Ready for input'
     });
+  }
+
+  private clearRimeCompositionAfterCandidateCommit(committedState: RimeState): RimeState {
+    if (this.rimeSessionId.length === 0) {
+      return committedState;
+    }
+    let clearedState = this.rimeService.clearComposition(this.rimeSessionId);
+    return {
+      schemaId: clearedState.schemaId.length > 0 ? clearedState.schemaId : committedState.schemaId,
+      rawInput: '',
+      composingText: '',
+      commitText: committedState.commitText,
+      candidates: [],
+      isAsciiMode: clearedState.isAsciiMode,
+      options: clearedState.options,
+      pageSize: 0,
+      pageNo: 0,
+      isLastPage: true,
+      highlightedCandidateIndex: -1,
+      selectKeys: clearedState.selectKeys
+    };
   }
 
   private async commitDirectText(text: string, statusText: string): Promise<void> {
@@ -2150,6 +2251,28 @@ export class SessionManager {
     }
     clearTimeout(this.voiceAutoStopHandle.timerId);
     this.voiceAutoStopHandle = undefined;
+  }
+
+  private async setVoiceKeepScreenOn(enabled: boolean): Promise<void> {
+    if (this.voiceKeepScreenOnActive === enabled) {
+      return;
+    }
+    if (!this.context) {
+      this.voiceKeepScreenOnActive = false;
+      return;
+    }
+    try {
+      let imeWindow = await windowManager.getLastWindow(this.context);
+      await imeWindow.setWindowKeepScreenOn(enabled);
+      this.voiceKeepScreenOnActive = enabled;
+      hilog.info(DOMAIN, TAG, 'setWindowKeepScreenOn(%{public}s) for voice input', String(enabled));
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'setWindowKeepScreenOn(%{public}s) failed: %{public}s',
+        String(enabled), (error as Error).message ?? JSON.stringify(error));
+      if (!enabled) {
+        this.voiceKeepScreenOnActive = false;
+      }
+    }
   }
 }
 
