@@ -3859,15 +3859,17 @@ struct KeyboardPanel {
     if (this.isQuickSwitchLabel(label)) {
       Row({ space: 0 }) {
         Text(this.resolveQuickSwitchPrimaryLabel())
-          .fontSize(fontSize + 5)
+          .fontSize(fontSize + 2)
           .fontWeight(FontWeight.Medium)
           .fontColor(enabled ? '#1E2024' : '#B5B7BE')
+          .maxLines(1)
 
         Text(`/${this.resolveQuickSwitchSecondaryLabel()}`)
-          .fontSize(fontSize - 1)
+          .fontSize(fontSize - 4)
           .fontWeight(FontWeight.Regular)
           .fontColor(enabled ? '#8D919A' : '#C3C5CB')
-          .margin({ top: 5 })
+          .maxLines(1)
+          .margin({ top: 4 })
       }
       .alignItems(VerticalAlign.Center)
     } else {
@@ -3886,15 +3888,17 @@ struct KeyboardPanel {
   private renderNineQuickSwitchLabel(enabled: boolean) {
     Row({ space: 0 }) {
       Text(this.resolveQuickSwitchPrimaryLabel())
-        .fontSize(17)
+        .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .fontColor(enabled ? '#1F2024' : '#B5B7BE')
+        .maxLines(1)
 
       Text(`/${this.resolveQuickSwitchSecondaryLabel()}`)
-        .fontSize(9)
+        .fontSize(8)
         .fontWeight(FontWeight.Regular)
         .fontColor(enabled ? '#8E9199' : '#C3C5CB')
-        .margin({ top: 5 })
+        .maxLines(1)
+        .margin({ top: 4 })
     }
     .alignItems(VerticalAlign.Center)
   }

@@ -2,8 +2,13 @@ import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import {
   OfflineRecognizer,
-  OfflineRecognizerConfig
+  OfflineRecognizerConfig,
+  SileroVadConfig,
+  TenVadConfig,
+  Vad,
+  VadConfig
 } from 'sherpa_onnx';
+import type { SpeechSegment } from 'sherpa_onnx';
 import { OffhandVoiceConfig, VoiceRecognitionResult } from '../common/ImeTypes';
 import { AsrListener, AsrProvider } from './AsrProvider';
 import { SenseVoiceModelInstaller, SenseVoiceModelPaths } from './SenseVoiceModelInstaller';
@@ -13,6 +18,19 @@ const TAG = 'SenseVoiceLocalAsr';
 
 export const SENSEVOICE_DEFAULT_CAPTURE_SAMPLE_RATE = 16000;
 const SENSEVOICE_MODEL_SAMPLE_RATE = 16000;
+// SenseVoice is an offline short-audio recognizer. Feeding a whole minute-plus
+// recording into one stream can exceed the model/runtime's stable context.
+const SENSEVOICE_MAX_DECODE_SECONDS = 25;
+const SENSEVOICE_MAX_DECODE_SAMPLES = SENSEVOICE_MODEL_SAMPLE_RATE * SENSEVOICE_MAX_DECODE_SECONDS;
+const SENSEVOICE_MIN_DECODE_SAMPLES = Math.round(SENSEVOICE_MODEL_SAMPLE_RATE * 0.2);
+const SENSEVOICE_VAD_THRESHOLD = 0.5;
+const SENSEVOICE_VAD_MIN_SPEECH_SECONDS = 0.25;
+const SENSEVOICE_VAD_MIN_SILENCE_SECONDS = 0.5;
+const SENSEVOICE_VAD_WINDOW_SIZE = 512;
+const SENSEVOICE_VAD_MAX_SPEECH_SECONDS = 20;
+const SENSEVOICE_VAD_BUFFER_SECONDS = 90;
+const SENSEVOICE_VAD_FEED_SECONDS = 1;
+const SENSEVOICE_VAD_FEED_SAMPLES = SENSEVOICE_MODEL_SAMPLE_RATE * SENSEVOICE_VAD_FEED_SECONDS;
 
 export class SenseVoiceLocalAsrProvider implements AsrProvider {
   readonly id: string = 'sensevoice_local';
@@ -21,6 +39,7 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
   private context?: common.Context;
   private listener?: AsrListener;
   private recognizer?: OfflineRecognizer;
+  private modelPaths?: SenseVoiceModelPaths;
   private active: boolean = false;
   private captureSampleRate: number = SENSEVOICE_DEFAULT_CAPTURE_SAMPLE_RATE;
   private unavailableReason: string = '';
@@ -84,6 +103,7 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
 
     this.listener = listener;
     this.active = true;
+    this.modelPaths = modelPaths;
     this.captureSampleRate = resolveSenseVoiceCaptureSampleRate(config);
     this.resetSessionState();
 
@@ -121,7 +141,7 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
       try {
         let samples = this.collectBufferedSamples();
         if (!discardResult && samples.length > 0) {
-          text = this.decodeSamples(samples);
+          text = this.decodeLongSamples(samples);
           if (text.length > 0) {
             this.listener?.onFinal(text);
           }
@@ -146,6 +166,7 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
   async destroy(): Promise<void> {
     this.active = false;
     this.recognizer = undefined;
+    this.modelPaths = undefined;
     this.listener = undefined;
     this.resetSessionState();
   }
@@ -188,6 +209,84 @@ export class SenseVoiceLocalAsrProvider implements AsrProvider {
       samples.length, result.text, result.lang, result.emotion, result.event,
       typeof result.json === 'string' ? (result.json as string).substring(0, 200) : '');
     return sanitizeTranscript(result.text);
+  }
+
+  private decodeLongSamples(samples: Float32Array): string {
+    let chunks = this.splitDecodeChunksWithVad(samples);
+    let transcripts: string[] = [];
+    hilog.info(DOMAIN, TAG,
+      'decoding SenseVoice input totalSamples=%{public}d chunks=%{public}d',
+      samples.length, chunks.length);
+    for (let index = 0; index < chunks.length; index++) {
+      let chunk = chunks[index];
+      let transcript = this.decodeSamples(chunk);
+      if (transcript.length > 0) {
+        transcripts.push(transcript);
+      }
+      hilog.info(DOMAIN, TAG,
+        'long decode chunk=%{public}d/%{public}d sampleCount=%{public}d textLen=%{public}d',
+        index + 1, chunks.length, chunk.length, transcript.length);
+    }
+    return joinTranscriptSegments(transcripts);
+  }
+
+  private splitDecodeChunksWithVad(samples: Float32Array): Float32Array[] {
+    let vadChunks = this.trySplitDecodeChunksWithSileroVad(samples);
+    if (vadChunks.length > 0) {
+      return vadChunks;
+    }
+    let fallbackChunks = splitDecodeChunks(samples);
+    hilog.info(DOMAIN, TAG,
+      'using fixed decode chunks totalSamples=%{public}d chunkSamples=%{public}d chunks=%{public}d',
+      samples.length, SENSEVOICE_MAX_DECODE_SAMPLES, fallbackChunks.length);
+    return fallbackChunks;
+  }
+
+  private trySplitDecodeChunksWithSileroVad(samples: Float32Array): Float32Array[] {
+    let paths = this.modelPaths;
+    if (!paths || !paths.resourceManager) {
+      hilog.warn(DOMAIN, TAG, 'Silero VAD skipped: model paths unavailable');
+      return [];
+    }
+
+    try {
+      let vadConfig = new VadConfig(
+        new SileroVadConfig(
+          paths.vadModelPath,
+          SENSEVOICE_VAD_THRESHOLD,
+          SENSEVOICE_VAD_MIN_SPEECH_SECONDS,
+          SENSEVOICE_VAD_MIN_SILENCE_SECONDS,
+          SENSEVOICE_VAD_WINDOW_SIZE,
+          SENSEVOICE_VAD_MAX_SPEECH_SECONDS
+        ),
+        new TenVadConfig('', 0, 0, 0, 0, 0),
+        SENSEVOICE_MODEL_SAMPLE_RATE,
+        false,
+        1,
+        'cpu'
+      );
+      let vad = new Vad(vadConfig, SENSEVOICE_VAD_BUFFER_SECONDS, paths.resourceManager);
+      let speechSegments = collectSileroVadSpeechSegments(vad, samples);
+      if (speechSegments.length === 0) {
+        hilog.warn(DOMAIN, TAG,
+          'Silero VAD found no speech segments totalSamples=%{public}d', samples.length);
+        return [];
+      }
+
+      let chunks: Float32Array[] = [];
+      for (let index = 0; index < speechSegments.length; index++) {
+        let segment = speechSegments[index];
+        appendDecodeChunks(chunks, segment);
+      }
+      hilog.info(DOMAIN, TAG,
+        'Silero VAD split totalSamples=%{public}d speechSegments=%{public}d decodeChunks=%{public}d',
+        samples.length, speechSegments.length, chunks.length);
+      return chunks;
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'Silero VAD split failed: %{public}s',
+        (error as Error).message ?? String(error));
+      return [];
+    }
   }
 
   private appendBufferedSamples(samples: Float32Array): void {
@@ -301,6 +400,92 @@ function resolveSenseVoiceLanguage(locale: string): string {
 
 function sanitizeTranscript(text: string): string {
   return text.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function collectSileroVadSpeechSegments(vad: Vad, samples: Float32Array): Float32Array[] {
+  let segments: Float32Array[] = [];
+  let offset = 0;
+  while (offset < samples.length) {
+    let end = Math.min(offset + SENSEVOICE_VAD_FEED_SAMPLES, samples.length);
+    vad.acceptWaveform(samples.slice(offset, end));
+    drainSileroVadSegments(vad, segments);
+    offset = end;
+  }
+  vad.flush();
+  drainSileroVadSegments(vad, segments);
+  return segments;
+}
+
+function drainSileroVadSegments(vad: Vad, segments: Float32Array[]): void {
+  while (!vad.isEmpty()) {
+    let segment: SpeechSegment = vad.front(false);
+    if (segment.samples.length >= SENSEVOICE_MIN_DECODE_SAMPLES) {
+      segments.push(new Float32Array(segment.samples));
+    }
+    vad.pop();
+  }
+}
+
+function appendDecodeChunks(chunks: Float32Array[], segment: Float32Array): void {
+  if (segment.length < SENSEVOICE_MIN_DECODE_SAMPLES) {
+    return;
+  }
+  let splitChunks = splitDecodeChunks(segment);
+  for (let index = 0; index < splitChunks.length; index++) {
+    chunks.push(splitChunks[index]);
+  }
+}
+
+function splitDecodeChunks(samples: Float32Array): Float32Array[] {
+  let chunks: Float32Array[] = [];
+  let offset = 0;
+  while (offset < samples.length) {
+    let end = Math.min(offset + SENSEVOICE_MAX_DECODE_SAMPLES, samples.length);
+    let chunk = samples.slice(offset, end);
+    if (chunk.length >= SENSEVOICE_MIN_DECODE_SAMPLES || chunks.length === 0) {
+      chunks.push(chunk);
+    }
+    offset = end;
+  }
+  return chunks;
+}
+
+function joinTranscriptSegments(segments: string[]): string {
+  let result = '';
+  for (let index = 0; index < segments.length; index++) {
+    let segment = sanitizeTranscript(segments[index]);
+    if (segment.length === 0) {
+      continue;
+    }
+    if (result.length === 0) {
+      result = segment;
+      continue;
+    }
+    result = shouldInsertSpaceBetween(result, segment) ? `${result} ${segment}` : `${result}${segment}`;
+  }
+  return result;
+}
+
+function shouldInsertSpaceBetween(left: string, right: string): boolean {
+  return endsWithAsciiWord(left) && startsWithAsciiWord(right);
+}
+
+function endsWithAsciiWord(text: string): boolean {
+  if (text.length === 0) {
+    return false;
+  }
+  return isAsciiWordCode(text.charCodeAt(text.length - 1));
+}
+
+function startsWithAsciiWord(text: string): boolean {
+  if (text.length === 0) {
+    return false;
+  }
+  return isAsciiWordCode(text.charCodeAt(0));
+}
+
+function isAsciiWordCode(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
 function pcm16leToFloat32(frame: Uint8Array): Float32Array {

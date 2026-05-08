@@ -6,10 +6,12 @@ const DOMAIN = 0xFF10;
 const TAG = 'SenseVoiceInstaller';
 
 export const SENSEVOICE_RAW_MODEL_ROOT = 'asr/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17';
+export const SENSEVOICE_VAD_MODEL_PATH = 'asr/silero_vad.onnx';
 
-const REQUIRED_MODEL_FILES: string[] = [
-  'model.int8.onnx',
-  'tokens.txt'
+const REQUIRED_RAW_FILES: string[] = [
+  `${SENSEVOICE_RAW_MODEL_ROOT}/model.int8.onnx`,
+  `${SENSEVOICE_RAW_MODEL_ROOT}/tokens.txt`,
+  SENSEVOICE_VAD_MODEL_PATH
 ];
 
 interface RawFdDescriptor {
@@ -22,6 +24,7 @@ export interface SenseVoiceModelPaths {
   modelDir: string;
   modelPath: string;
   tokensPath: string;
+  vadModelPath: string;
   resourceManager?: Object;
 }
 
@@ -32,8 +35,8 @@ export class SenseVoiceModelInstaller {
       hilog.warn(DOMAIN, TAG, 'unexpected local ASR modelId: %{public}s', localConfig.modelId);
     }
 
-    for (let index = 0; index < REQUIRED_MODEL_FILES.length; index++) {
-      let rawPath = `${SENSEVOICE_RAW_MODEL_ROOT}/${REQUIRED_MODEL_FILES[index]}`;
+    for (let index = 0; index < REQUIRED_RAW_FILES.length; index++) {
+      let rawPath = REQUIRED_RAW_FILES[index];
       let descriptor: RawFdDescriptor | undefined = undefined;
       try {
         descriptor = await context.resourceManager.getRawFd(rawPath) as RawFdDescriptor;
@@ -59,6 +62,7 @@ export class SenseVoiceModelInstaller {
       modelDir: SENSEVOICE_RAW_MODEL_ROOT,
       modelPath: `${SENSEVOICE_RAW_MODEL_ROOT}/model.int8.onnx`,
       tokensPath: `${SENSEVOICE_RAW_MODEL_ROOT}/tokens.txt`,
+      vadModelPath: SENSEVOICE_VAD_MODEL_PATH,
       resourceManager: context.resourceManager as Object
     };
   }
