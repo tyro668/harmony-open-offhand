@@ -1116,6 +1116,15 @@ export class SessionManager {
         });
         return;
       }
+      if (!isTranslate && (resultText.length === 0 || (resultText === sourceText && result.provider === '原文'))) {
+        keyboardStateStore.patch({
+          isPolishRunning: false,
+          voiceState: 'stopped',
+          voiceStatusText: 'voice.stopped',
+          statusText: `Polish unavailable (${result.provider})`
+        });
+        return;
+      }
       let insertText = resultText.length > 0 ? resultText : sourceText;
       let inserted = await this.editorAdapter.insertText(insertText);
       if (!inserted) {

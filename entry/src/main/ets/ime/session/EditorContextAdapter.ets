@@ -1,6 +1,9 @@
 import { inputMethodEngine } from '@kit.IMEKit';
 import { InputSessionContext, OffhandSubtypeConfig } from '../common/ImeTypes';
 
+const LONG_INSERT_CHUNK_SIZE: number = 256;
+const LONG_INSERT_VERIFY_TAIL_SIZE: number = 96;
+
 export class EditorContextAdapter {
   private readonly inputClient: inputMethodEngine.InputClient;
   private previewEnabled: boolean = false;
@@ -48,10 +51,48 @@ export class EditorContextAdapter {
   }
 
   async insertText(text: string): Promise<boolean> {
+    if (text.length > LONG_INSERT_CHUNK_SIZE) {
+      return await this.insertTextInChunks(text);
+    }
+    return await this.insertTextChunk(text);
+  }
+
+  private async insertTextChunk(text: string): Promise<boolean> {
     try {
       return await this.inputClient.insertText(text);
     } catch (_) {
       return false;
+    }
+  }
+
+  private async insertTextInChunks(text: string): Promise<boolean> {
+    for (let offset = 0; offset < text.length; offset += LONG_INSERT_CHUNK_SIZE) {
+      let chunk = text.substring(offset, Math.min(text.length, offset + LONG_INSERT_CHUNK_SIZE));
+      if (chunk.length === 0) {
+        continue;
+      }
+      let inserted = await this.insertTextChunk(chunk);
+      if (!inserted) {
+        return false;
+      }
+    }
+    return await this.verifyInsertedTail(text);
+  }
+
+  private async verifyInsertedTail(text: string): Promise<boolean> {
+    let tailLength = Math.min(text.length, LONG_INSERT_VERIFY_TAIL_SIZE);
+    if (tailLength <= 0) {
+      return true;
+    }
+    let expectedTail = text.substring(text.length - tailLength);
+    try {
+      let recent = await this.inputClient.getForward(tailLength);
+      if (typeof recent !== 'string') {
+        return true;
+      }
+      return recent.endsWith(expectedTail);
+    } catch (_) {
+      return true;
     }
   }
 
