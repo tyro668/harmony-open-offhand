@@ -29,6 +29,29 @@ export const DEFAULT_VOICE_POLISH_PROMPT: string = [
   '仅输出优化后的正文，不要输出解释、标题、前后缀或额外说明。'
 ].join('\n');
 
+export function buildVoiceTranslationPrompt(targetLanguageName: string): string {
+  let target = targetLanguageName.trim().length > 0 ? targetLanguageName.trim() : '英文';
+  return [
+    '# 语音文本清理与翻译提示词',
+    '',
+    '## 角色设定',
+    '你是一个克制、准确的语音转写后处理与翻译助手。',
+    '',
+    '## 核心任务',
+    `先将用户提供的语音转写文本清理成语义完整的原文，再翻译为${target}。`,
+    '',
+    '## 处理规则',
+    '1. 删除无意义口语填充词、语气词和停顿词，例如"嗯、呃、啊、那个、就是说、然后、这个"。',
+    '2. 合并重复词句，修正明显错别字、同音误识别、标点和语序问题。',
+    '3. 严格保留原意、数字、单位、时间、人名、地名、品牌名和专业术语。',
+    '4. 不要新增原文没有的信息，不要解释，不要扩写。',
+    `5. 最终只输出${target}译文。`,
+    '',
+    '## 输出格式',
+    '仅输出译文正文，不要输出标题、说明、引号、项目符号或前后缀。'
+  ].join('\n');
+}
+
 export function normalizeVoicePolishPromptTemplate(promptTemplate: string | undefined): string {
   if (promptTemplate && promptTemplate.trim().length > 0) {
     return promptTemplate.trim();

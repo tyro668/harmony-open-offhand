@@ -21,6 +21,11 @@ import {
   normalizeVoicePolishPromptMode,
   normalizeVoicePolishPromptTemplate
 } from '../llm/DefaultPolishPrompt';
+import {
+  listVoiceTranslationTargets,
+  resolveVoiceTranslationTarget,
+  VoiceTranslationTarget
+} from '../llm/VoiceTranslationTarget';
 
 const PANEL_DOMAIN: number = 0xFF10;
 const PANEL_TAG: string = 'KeyboardPanel';
@@ -115,6 +120,7 @@ interface QwertyKeyDescriptor {
 
 type SymbolKeyRole = 'text' | 'more' | 'backspace' | 'return' | 'space' | 'enter';
 type SymbolKeyboardVariant = 'symbol' | 'number';
+type VoiceToolAction = 'polish' | 'translate' | 'clear' | 'back';
 
 interface SymbolKeyDescriptor {
   label: string;
@@ -123,6 +129,20 @@ interface SymbolKeyDescriptor {
   weight: number;
   gray: boolean;
 }
+
+interface VoiceToolDescriptor {
+  label: string;
+  action: VoiceToolAction;
+  centerXRatio: number;
+  top: number;
+}
+
+const VOICE_TOOL_ACTIONS: VoiceToolDescriptor[] = [
+  { label: '润色', action: 'polish', centerXRatio: 0.235, top: 128 },
+  { label: '翻译', action: 'translate', centerXRatio: 0.405, top: 158 },
+  { label: '清空', action: 'clear', centerXRatio: 0.595, top: 158 },
+  { label: '回退', action: 'back', centerXRatio: 0.765, top: 128 }
+];
 
 const NINE_GRID_ROWS: NineGridKeyDescriptor[][] = [
   [
@@ -269,6 +289,7 @@ struct KeyboardPanel {
   @State private runtimeEnableBuiltinAsr: boolean = true;
   @State private runtimeEnableCloudPolish: boolean = true;
   @State private runtimeAutoPolishVoiceResult: boolean = true;
+  @State private llmTranslateTargetLanguage: string = 'en';
   @State private runtimeSaveStatus: string = '';
   @State private pendingQuickSubtypeId: string = '';
   private voicePulseTimer?: number;
@@ -455,8 +476,9 @@ struct KeyboardPanel {
             if (this.showSymbolKeyboard) {
               this.renderReferenceSymbolKeyboard();
             } else {
-              this.renderVoiceDraftCard()
-              this.renderPolishSuggestionStrip()
+              if (this.uiState.keyboardLayout !== 'voice_panel') {
+                this.renderPolishSuggestionStrip()
+              }
 
               if (this.uiState.keyboardLayout === 'voice_panel') {
                 this.renderVoicePanel();
@@ -470,7 +492,7 @@ struct KeyboardPanel {
           .width('100%')
           .height('100%')
           .padding({ left: 8, right: 8, top: PANEL_TOP_PADDING, bottom: PANEL_BOTTOM_SAFE_GAP })
-          .backgroundColor('#D9DCE2')
+          .backgroundColor(this.resolveKeyboardPanelBackgroundColor())
 
           if (!this.showSymbolKeyboard && this.shouldShowCandidateStrip()) {
             this.renderCandidateToolbarOverlay()
@@ -493,7 +515,18 @@ struct KeyboardPanel {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#D9DCE2')
+    .backgroundColor(this.resolveKeyboardPanelBackgroundColor())
+  }
+
+  private resolveKeyboardPanelBackgroundColor(): string {
+    if (!this.showSettingsTray && !this.showSymbolKeyboard && this.uiState.keyboardLayout === 'voice_panel') {
+      return this.resolveVoicePanelBackgroundColor();
+    }
+    return '#D9DCE2';
+  }
+
+  private resolveVoicePanelBackgroundColor(): string {
+    return '#EEF3FF';
   }
 
   @Builder
@@ -705,6 +738,8 @@ struct KeyboardPanel {
         this.renderLlmModelSettingsGrid()
       } else if (this.activeSettingsTab === 'voicePolishPrompt') {
         this.renderLlmPromptSettingsGrid()
+      } else if (this.activeSettingsTab === 'voiceTranslateTarget') {
+        this.renderVoiceTranslateTargetSettingsGrid()
       } else {
         List({ space: 12 }) {
           ListItem() {
@@ -732,7 +767,8 @@ struct KeyboardPanel {
   private renderSettingsHeader() {
     if (this.activeSettingsTab === 'voicePolish' ||
       this.activeSettingsTab === 'voicePolishModel' ||
-      this.activeSettingsTab === 'voicePolishPrompt') {
+      this.activeSettingsTab === 'voicePolishPrompt' ||
+      this.activeSettingsTab === 'voiceTranslateTarget') {
       this.renderVoicePolishSettingsHeader()
     } else {
       Row({ space: 8 }) {
@@ -815,6 +851,9 @@ struct KeyboardPanel {
     }
     if (this.activeSettingsTab === 'voicePolishPrompt') {
       return $r('app.string.ime_polish_prompt_title');
+    }
+    if (this.activeSettingsTab === 'voiceTranslateTarget') {
+      return '翻译目标语言';
     }
     return $r('app.string.ime_voice_auto_polish');
   }
@@ -1044,6 +1083,83 @@ struct KeyboardPanel {
   }
 
   @Builder
+  private renderVoiceTranslateTargetSettingsGrid() {
+    List({ space: 12 }) {
+      ListItem() {
+        this.renderVoiceTranslateTargetCard()
+      }
+
+      if (this.llmSaveStatus.length > 0) {
+        ListItem() {
+          Text(this.llmSaveStatus)
+            .fontSize(11)
+            .fontColor('#3478F6')
+            .width('100%')
+            .padding({ left: 4 })
+        }
+      }
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 4, right: 4, top: 4, bottom: 8 })
+    .scrollBar(BarState.Auto)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  private renderVoiceTranslateTargetCard() {
+    Column() {
+      ForEach(listVoiceTranslationTargets(), (target: VoiceTranslationTarget) => {
+        this.renderVoiceTranslateTargetOption(target)
+      }, (target: VoiceTranslationTarget): string => target.id)
+    }
+    .width('100%')
+    .backgroundColor('#FFFFFF')
+    .borderRadius(14)
+    .border({ width: 1, color: '#E4E6EA' })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  private renderVoiceTranslateTargetOption(target: VoiceTranslationTarget) {
+    Column() {
+      Row({ space: 12 }) {
+        Text(target.label)
+          .layoutWeight(1)
+          .fontSize(14)
+          .fontWeight(target.id === this.llmTranslateTargetLanguage ? FontWeight.Bold : FontWeight.Medium)
+          .fontColor('#17181B')
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+
+        if (target.id === this.llmTranslateTargetLanguage) {
+          Text('✓')
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#3478F6')
+            .textAlign(TextAlign.Center)
+        }
+      }
+      .width('100%')
+      .height(52)
+      .padding({ left: 12, right: 12, top: 0, bottom: 0 })
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        this.llmTranslateTargetLanguage = target.id;
+        this.llmSaveStatus = '';
+      })
+
+      if (target.id !== 'de') {
+        Divider()
+          .strokeWidth(1)
+          .color('#F0F2F6')
+          .width('100%')
+      }
+    }
+    .width('100%')
+  }
+
+  @Builder
   private renderVoiceAutoPolishSection() {
     Column() {
       this.renderVoiceAutoPolishSwitchCard()
@@ -1065,6 +1181,11 @@ struct KeyboardPanel {
         (): void => {
           this.openVoicePolishPromptSettings();
         })
+      Divider()
+        .strokeWidth(1)
+        .color('#F0F2F6')
+        .width('100%')
+      this.renderVoiceTranslateTargetEntryRow()
     }
     .width('100%')
     .backgroundColor('#FFFFFF')
@@ -1125,6 +1246,41 @@ struct KeyboardPanel {
     .alignItems(VerticalAlign.Center)
     .onClick(() => {
       action();
+    })
+  }
+
+  @Builder
+  private renderVoiceTranslateTargetEntryRow() {
+    Row({ space: 12 }) {
+      Column({ space: 2 }) {
+        Text('翻译目标语言')
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#17181B')
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+
+        Text(this.resolveCurrentTranslateTargetLabel())
+          .fontSize(12)
+          .fontColor('#71757F')
+          .textAlign(TextAlign.Start)
+          .maxLines(1)
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+
+      Text('›')
+        .fontSize(23)
+        .fontColor('#7A7D82')
+        .height('100%')
+        .textAlign(TextAlign.Center)
+    }
+    .width('100%')
+    .height(62)
+    .padding({ left: 12, right: 12, top: 0, bottom: 0 })
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.openVoiceTranslateTargetSettings();
     })
   }
 
@@ -1443,6 +1599,10 @@ struct KeyboardPanel {
     return items;
   }
 
+  private resolveCurrentTranslateTargetLabel(): string {
+    return resolveVoiceTranslationTarget(this.llmTranslateTargetLanguage).label;
+  }
+
   private resolveCurrentProviderName(): string {
     let providers: BuiltinModelProvider[] = listBuiltinModelProviders();
     for (let i = 0; i < providers.length; i++) {
@@ -1618,6 +1778,7 @@ struct KeyboardPanel {
     let autoVoicePolishEnabled = runtime.enableCloudPolish && runtime.autoPolishVoiceResult;
     this.runtimeEnableCloudPolish = autoVoicePolishEnabled;
     this.runtimeAutoPolishVoiceResult = autoVoicePolishEnabled;
+    this.llmTranslateTargetLanguage = resolveVoiceTranslationTarget(runtime.llmTranslateTargetLanguage).id;
     this.llmPromptTemplateMode = normalizeVoicePolishPromptMode(runtime.llmPromptTemplateMode, runtime.llmPromptTemplate);
     this.llmPromptTemplate = normalizeVoicePolishPromptTemplate(runtime.llmPromptTemplate);
     this.runtimeSaveStatus = '';
@@ -1661,6 +1822,13 @@ struct KeyboardPanel {
         });
       return;
     }
+    if (this.activeSettingsTab === 'voiceTranslateTarget') {
+      void this.saveVoiceAutoPolishSettings('')
+        .then((): void => {
+          this.activeSettingsTab = 'voicePolish';
+        });
+      return;
+    }
     this.activeSettingsTab = 'common';
     void this.saveVoiceAutoPolishSettings('')
       .then((): void => {
@@ -1688,6 +1856,12 @@ struct KeyboardPanel {
     this.activeSettingsTab = 'voicePolishPrompt';
   }
 
+  private openVoiceTranslateTargetSettings(): void {
+    this.llmTranslateTargetLanguage = resolveVoiceTranslationTarget(this.llmTranslateTargetLanguage).id;
+    this.llmSaveStatus = '';
+    this.activeSettingsTab = 'voiceTranslateTarget';
+  }
+
   private resolvePolishPromptSummary(): ResourceStr {
     if (this.llmPromptTemplateMode === 'default') {
       return $r('app.string.ime_polish_prompt_default_summary');
@@ -1710,6 +1884,7 @@ struct KeyboardPanel {
       runtime.enableBuiltinAsr = this.runtimeEnableBuiltinAsr;
       runtime.enableCloudPolish = this.runtimeAutoPolishVoiceResult;
       runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
+      runtime.llmTranslateTargetLanguage = resolveVoiceTranslationTarget(this.llmTranslateTargetLanguage).id;
       runtime.llmPromptTemplateMode = this.llmPromptTemplateMode;
       runtime.llmPromptTemplate = normalizeVoicePolishPromptTemplate(this.llmPromptTemplate);
       await session.updateRuntimeSettings(runtime, 'keyboardVoicePolishSettings');
@@ -1741,6 +1916,7 @@ struct KeyboardPanel {
     runtime.enableBuiltinAsr = this.runtimeEnableBuiltinAsr;
     runtime.enableCloudPolish = this.runtimeAutoPolishVoiceResult;
     runtime.autoPolishVoiceResult = this.runtimeAutoPolishVoiceResult;
+    runtime.llmTranslateTargetLanguage = resolveVoiceTranslationTarget(this.llmTranslateTargetLanguage).id;
     this.runtimeSaveStatus = '保存中…';
     session.updateRuntimeSettings(runtime, 'keyboardSettings')
       .then((): void => {
@@ -1964,63 +2140,6 @@ struct KeyboardPanel {
     .backgroundColor('#D9DCE2')
     .position({ x: 0, y: PANEL_TOP_PADDING })
     .zIndex(8)
-  }
-
-  @Builder
-  private renderVoiceDraftCard() {
-    if (this.uiState.voiceDraftText.length > 0) {
-      Column({ space: 10 }) {
-        Row({ space: 8 }) {
-          Text($r('app.string.ime_voice_draft_title'))
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#2E2E2E')
-            .layoutWeight(1)
-            .textAlign(TextAlign.Start)
-
-          Text($r('app.string.ime_voice_draft_hint'))
-            .fontSize(10)
-            .fontColor('#75767C')
-        }
-        .width('100%')
-
-        Text(this.uiState.voiceDraftText)
-          .fontSize(14)
-          .fontColor('#1C1C1E')
-          .width('100%')
-          .textAlign(TextAlign.Start)
-          .maxLines(4)
-
-        Row({ space: 8 }) {
-          Button($r('app.string.ime_action_insert'))
-            .layoutWeight(1)
-            .height(38)
-            .fontSize(13)
-            .fontColor('#FFFFFF')
-            .backgroundColor('#3366FF')
-            .borderRadius(12)
-            .onClick(() => {
-              void imeRuntime.getSessionManager()?.insertVoiceDraft();
-            })
-
-          Button($r('app.string.ime_action_clear'))
-            .layoutWeight(1)
-            .height(38)
-            .fontSize(13)
-            .fontColor('#4C4D52')
-            .backgroundColor('#ECECEF')
-            .borderRadius(12)
-            .onClick(() => {
-              void imeRuntime.getSessionManager()?.clearVoiceDraft();
-            })
-        }
-        .width('100%')
-      }
-      .width('100%')
-      .padding(8)
-      .backgroundColor('#FFFFFF')
-      .borderRadius(16)
-    }
   }
 
   @Builder
@@ -2955,54 +3074,159 @@ struct KeyboardPanel {
   @Builder
   private renderVoicePanel() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Column({ space: 4 }) {
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(this.resolveVoicePanelBackgroundColor())
+        .borderRadius(this.resolveVoiceScaledSize(12))
+        .shadow({
+          radius: this.resolveVoiceScaledSize(8),
+          color: '#18000000',
+          offsetX: 0,
+          offsetY: this.resolveVoiceScaledSize(3)
+        })
+        .hitTestBehavior(HitTestMode.Transparent)
+
+      if (this.uiState.voiceTranscriptPreview.length > 0) {
+        Column() {
+          Text(this.uiState.voiceTranscriptPreview)
+            .fontSize(this.resolveVoiceScaledSize(13))
+            .minFontSize(10)
+            .maxFontSize(this.resolveVoiceScaledSize(13))
+            .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+            .fontColor('#1D2842')
+            .fontWeight(FontWeight.Medium)
+            .textAlign(TextAlign.Center)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: this.resolveVoicePreviewMaxWidth() })
+            .maxLines(3)
+            .hitTestBehavior(HitTestMode.Transparent)
+        }
+        .width('100%')
+        .padding({
+          left: this.resolveVoiceScaledSize(18),
+          right: this.resolveVoiceScaledSize(18),
+          top: this.resolveVoiceScaledSize(10)
+        })
+        .position({ x: 0, y: 0 })
+        .alignItems(HorizontalAlign.Center)
+        .hitTestBehavior(HitTestMode.Transparent)
+      }
+
+      Column({ space: 3 }) {
         this.renderVoiceHeroButton()
 
-        if (this.shouldRenderVoiceHeroTitle()) {
-          Text(this.resolveVoiceHeroTitle())
-            .fontSize(this.resolveVoiceScaledSize(14))
-            .minFontSize(12)
-            .maxFontSize(this.resolveVoiceScaledSize(14))
-            .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.resolveVoiceHeroTitleColor())
-            .textAlign(TextAlign.Center)
-            .constraintSize({ maxWidth: this.resolveVoiceTextMaxWidth() })
-            .maxLines(1)
-        }
+        Text(this.resolveVoicePrimaryTitle())
+          .fontSize(this.resolveVoicePrimaryTitleSize())
+          .minFontSize(8)
+          .maxFontSize(this.resolveVoicePrimaryTitleSize())
+          .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+          .fontWeight(FontWeight.Normal)
+          .fontColor(this.resolveVoiceHeroTitleColor())
+          .textAlign(TextAlign.Center)
+          .constraintSize({ maxWidth: this.resolveVoiceTextMaxWidth() })
+          .maxLines(1)
+
+        Text(this.resolveVoiceSubtitle())
+          .fontSize(this.resolveVoiceScaledSize(9))
+          .minFontSize(8)
+          .maxFontSize(this.resolveVoiceScaledSize(9))
+          .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+          .fontWeight(FontWeight.Normal)
+          .fontColor(this.resolveVoiceSubtitleColor())
+          .textAlign(TextAlign.Center)
+          .constraintSize({ maxWidth: this.resolveVoiceTextMaxWidth() })
+          .maxLines(1)
       }
       .width('100%')
       .height('100%')
-      .padding({ top: 8, bottom: 10 })
+      .padding({
+        left: this.resolveVoiceScaledSize(18),
+        right: this.resolveVoiceScaledSize(18),
+        top: this.uiState.voiceTranscriptPreview.length > 0 ? this.resolveVoiceScaledSize(46) : this.resolveVoiceScaledSize(8),
+        bottom: this.resolveVoiceScaledSize(72)
+      })
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
-
-      if (this.uiState.voiceTranscriptPreview.length > 0) {
-        Text(this.uiState.voiceTranscriptPreview)
-          .fontSize(16)
-          .fontColor('#1D2842')
-          .fontWeight(FontWeight.Medium)
-          .textAlign(TextAlign.Start)
-          .maxLines(5)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-          .padding({ left: 20, right: 20, top: 14, bottom: 0 })
-          .hitTestBehavior(HitTestMode.Transparent)
-      }
 
       this.renderVoicePanelActionButtons()
     }
     .width('100%')
     .layoutWeight(1)
+    .clip(true)
+  }
+
+  @Builder
+  private renderVoicePanelRings() {
+    Stack({ alignContent: Alignment.Center }) {
+      Column()
+        .width(this.resolveVoiceScaledSize(132))
+        .height(this.resolveVoiceScaledSize(132))
+        .borderRadius(this.resolveVoiceScaledSize(66))
+        .border({ width: 1, color: 'rgba(47,107,255,0.10)' })
+        .opacity(this.uiState.voiceState === 'idle' ? 0.48 : 0.72)
+
+      Column()
+        .width(this.resolveVoiceScaledSize(94))
+        .height(this.resolveVoiceScaledSize(94))
+        .borderRadius(this.resolveVoiceScaledSize(47))
+        .border({ width: 1, color: 'rgba(47,107,255,0.08)' })
+        .opacity(this.uiState.voiceState === 'idle' ? 0.42 : 0.68)
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ bottom: this.resolveVoiceScaledSize(96) })
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  private renderVoiceToolArc() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column()
+        .width(this.resolveVoiceScaledSize(252))
+        .height(this.resolveVoiceScaledSize(252))
+        .borderRadius(this.resolveVoiceScaledSize(126))
+        .border({ width: 2, color: 'rgba(255,255,255,0.62)' })
+        .position({
+          x: this.resolveVoiceCenteredX(this.resolveVoiceScaledSize(252)),
+          y: this.resolveVoiceScaledSize(-52)
+        })
+
+      this.renderVoiceToolArcDot(0.18, 127)
+      this.renderVoiceToolArcDot(0.82, 127)
+    }
+    .width('100%')
+    .height('100%')
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  private renderVoiceToolArcDot(centerXRatio: number, top: number) {
+    Column()
+      .width(this.resolveVoiceScaledSize(8))
+      .height(this.resolveVoiceScaledSize(8))
+      .borderRadius(this.resolveVoiceScaledSize(4))
+      .backgroundColor('rgba(255,255,255,0.96)')
+      .shadow({
+        radius: this.resolveVoiceScaledSize(5),
+        color: '#18000000',
+        offsetX: 0,
+        offsetY: this.resolveVoiceScaledSize(2)
+      })
+      .position({
+        x: this.resolveVoiceToolCenterX(centerXRatio, this.resolveVoiceScaledSize(8)),
+        y: this.resolveVoiceScaledSize(top)
+      })
+      .hitTestBehavior(HitTestMode.Transparent)
   }
 
   @Builder
   private renderVoiceHeroButton() {
     Stack({ alignContent: Alignment.Center }) {
       Column()
-        .width(this.resolveVoiceScaledSize(118))
-        .height(this.resolveVoiceScaledSize(118))
-        .borderRadius(this.resolveVoiceScaledSize(59))
+        .width(this.resolveVoiceScaledSize(76))
+        .height(this.resolveVoiceScaledSize(76))
+        .borderRadius(this.resolveVoiceScaledSize(38))
         .backgroundColor(this.resolveVoicePulseColor())
         .opacity(this.resolveVoiceOuterPulseOpacity())
         .scale({
@@ -3012,9 +3236,9 @@ struct KeyboardPanel {
         .animation({ duration: VOICE_ANIMATION_INTERVAL_MS, curve: Curve.EaseOut, iterations: 1 })
 
       Column()
-        .width(this.resolveVoiceScaledSize(100))
-        .height(this.resolveVoiceScaledSize(100))
-        .borderRadius(this.resolveVoiceScaledSize(50))
+        .width(this.resolveVoiceScaledSize(64))
+        .height(this.resolveVoiceScaledSize(64))
+        .borderRadius(this.resolveVoiceScaledSize(32))
         .backgroundColor(this.resolveVoicePulseColor())
         .opacity(this.resolveVoiceInnerPulseOpacity())
         .scale({
@@ -3033,8 +3257,8 @@ struct KeyboardPanel {
             .animation({ duration: VOICE_ANIMATION_INTERVAL_MS, curve: Curve.EaseInOut, iterations: 1 })
         } else {
           Image($r('app.media.ime_icon_voice_mic_white'))
-            .width(this.resolveVoiceScaledSize(44))
-            .height(this.resolveVoiceScaledSize(44))
+            .width(this.resolveVoiceScaledSize(28))
+            .height(this.resolveVoiceScaledSize(28))
             .objectFit(ImageFit.Contain)
             .opacity(this.uiState.voiceState === 'starting' ? 0.78 : 1)
             .scale({
@@ -3044,92 +3268,150 @@ struct KeyboardPanel {
             .animation({ duration: VOICE_ANIMATION_INTERVAL_MS, curve: Curve.EaseInOut, iterations: 1 })
         }
       }
-      .width(this.resolveVoiceScaledSize(82))
-      .height(this.resolveVoiceScaledSize(82))
+      .width(this.resolveVoiceMicButtonSize())
+      .height(this.resolveVoiceMicButtonSize())
       .type(ButtonType.Circle)
       .backgroundColor(this.resolveVoiceButtonColor())
-      .border({ width: 3, color: 'rgba(255,255,255,0.82)' })
       .shadow({
-        radius: 18,
+        radius: this.resolveVoiceScaledSize(10),
         color: '#403366FF',
         offsetX: 0,
-        offsetY: 10
+        offsetY: this.resolveVoiceScaledSize(5)
       })
       .opacity(this.uiState.voiceEnabled ? 1 : 0.58)
       .onClick(() => {
         this.startOrStopVoice();
       })
     }
-    .width(this.resolveVoiceScaledSize(138))
-    .height(this.resolveVoiceScaledSize(108))
+    .width(this.resolveVoiceScaledSize(92))
+    .height(this.resolveVoiceScaledSize(66))
   }
 
   @Builder
   private renderVoicePanelActionButtons() {
-    Column() {
-      Row() {
-        Button() {
-          Text('清空')
-            .fontSize(this.resolveVoiceScaledSize(13))
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#24304A')
-            .textAlign(TextAlign.Center)
-            .maxLines(1)
-        }
-        .width(this.resolveVoiceScaledSize(72))
-        .height(this.resolveVoiceScaledSize(42))
-        .type(ButtonType.Normal)
-        .backgroundColor('rgba(255,255,255,0.34)')
-        .border({ width: 2, color: 'rgba(255,255,255,0.64)' })
-        .borderRadius(this.resolveVoiceScaledSize(21))
-        .shadow({
-          radius: 8,
-          color: '#16000000',
-          offsetX: 0,
-          offsetY: 4
-        })
-        .onClick(() => {
-          void imeRuntime.getSessionManager()?.clearEditorText();
-        })
-
-        Button() {
-          this.renderIconAsset('backspace', this.resolveVoiceScaledSize(30), this.resolveVoiceScaledSize(23))
-        }
-        .width(this.resolveVoiceScaledSize(72))
-        .height(this.resolveVoiceScaledSize(42))
-        .type(ButtonType.Normal)
-        .backgroundColor('rgba(255,255,255,0.34)')
-        .border({ width: 2, color: 'rgba(255,255,255,0.64)' })
-        .borderRadius(this.resolveVoiceScaledSize(21))
-        .shadow({
-          radius: 8,
-          color: '#16000000',
-          offsetX: 0,
-          offsetY: 4
-        })
-        .onClick(() => {
-          this.handleBackspaceClick();
-        })
-        .gesture(
-          LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
-            .onAction(() => {
-              this.startBackspaceRepeat();
-            })
-            .onActionEnd(() => {
-              this.finishBackspaceRepeat();
-            })
-        )
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.SpaceBetween)
-      .alignItems(VerticalAlign.Center)
+    Stack({ alignContent: Alignment.TopStart }) {
+      ForEach(VOICE_TOOL_ACTIONS, (tool: VoiceToolDescriptor) => {
+        this.renderVoicePanelActionButton(tool)
+      }, (tool: VoiceToolDescriptor): string => tool.action)
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 18, right: 18, bottom: 14 })
-    .justifyContent(FlexAlign.End)
-    .alignItems(HorizontalAlign.Center)
     .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  private renderVoicePanelActionButton(tool: VoiceToolDescriptor) {
+    Button() {
+      Stack({ alignContent: Alignment.Center }) {
+        Column()
+          .width(this.resolveVoiceToolButtonSize() - this.resolveVoiceScaledSize(8))
+          .height(this.resolveVoiceToolButtonSize() - this.resolveVoiceScaledSize(8))
+          .borderRadius((this.resolveVoiceToolButtonSize() - this.resolveVoiceScaledSize(8)) / 2)
+          .backgroundColor('rgba(255,255,255,0.18)')
+          .hitTestBehavior(HitTestMode.Transparent)
+
+        Column({ space: 2 }) {
+          Blank()
+            .height(this.resolveVoiceScaledSize(2))
+
+          Row() {
+            Blank()
+              .layoutWeight(1)
+            this.renderVoiceToolIcon(tool.action, this.resolveVoiceToolEnabled(tool.action))
+            Blank()
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .height(this.resolveVoiceScaledSize(21))
+          .alignItems(VerticalAlign.Center)
+
+          Text(tool.label)
+            .fontSize(this.resolveVoiceScaledSize(9))
+            .minFontSize(8)
+            .maxFontSize(this.resolveVoiceScaledSize(9))
+            .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.resolveVoiceToolEnabled(tool.action) ? '#24304A' : '#8D96AA')
+            .textAlign(TextAlign.Center)
+            .width('100%')
+            .maxLines(1)
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      }
+    }
+    .width(this.resolveVoiceToolButtonSize())
+    .height(this.resolveVoiceToolButtonSize())
+    .type(ButtonType.Circle)
+    .backgroundColor('rgba(255,255,255,0.54)')
+    .shadow({
+      radius: this.resolveVoiceScaledSize(10),
+      color: '#22000000',
+      offsetX: 0,
+      offsetY: this.resolveVoiceScaledSize(5)
+    })
+    .opacity(this.resolveVoiceToolEnabled(tool.action) ? 1 : 0.42)
+    .enabled(this.resolveVoiceToolEnabled(tool.action))
+    .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+    .position({
+      x: this.resolveVoiceToolCenterX(tool.centerXRatio, this.resolveVoiceToolButtonSize()),
+      y: this.resolveVoiceScaledSize(tool.top)
+    })
+    .onClick(() => {
+      this.handleVoiceToolAction(tool.action);
+    })
+    .gesture(
+      LongPressGesture({ repeat: false, duration: BACKSPACE_LONG_PRESS_DURATION_MS })
+        .onAction(() => {
+          if (tool.action === 'back' && !this.uiState.canRevertPolish) {
+            this.startBackspaceRepeat();
+          }
+        })
+        .onActionEnd(() => {
+          if (tool.action === 'back' && !this.uiState.canRevertPolish) {
+            this.finishBackspaceRepeat();
+          }
+        })
+    )
+  }
+
+  @Builder
+  private renderVoiceToolIcon(action: VoiceToolAction, enabled: boolean) {
+    if (action === 'polish') {
+      this.renderIconAsset('style', this.resolveVoiceScaledSize(18), this.resolveVoiceScaledSize(18), enabled ? 1 : 0.46)
+    } else if (action === 'translate') {
+      Text('文A')
+        .fontSize(this.resolveVoiceScaledSize(15))
+        .minFontSize(12)
+        .maxFontSize(this.resolveVoiceScaledSize(15))
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(enabled ? '#256BFF' : '#8FA7DB')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    } else if (action === 'clear') {
+      Text('⌧')
+        .fontSize(this.resolveVoiceScaledSize(17))
+        .minFontSize(13)
+        .maxFontSize(this.resolveVoiceScaledSize(17))
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(enabled ? '#256BFF' : '#8FA7DB')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    } else {
+      Text('↶')
+        .fontSize(this.resolveVoiceScaledSize(20))
+        .minFontSize(15)
+        .maxFontSize(this.resolveVoiceScaledSize(20))
+        .heightAdaptivePolicy(TextHeightAdaptivePolicy.MIN_FONT_SIZE_FIRST)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(enabled ? '#256BFF' : '#8FA7DB')
+        .textAlign(TextAlign.Center)
+        .maxLines(1)
+    }
   }
 
   private isVoiceMotionActive(): boolean {
@@ -3141,8 +3423,42 @@ struct KeyboardPanel {
     return this.resolveReferenceQwertyScaledSize(referenceSize);
   }
 
+  private resolveVoicePrimaryTitleSize(): number {
+    return Math.max(10, this.resolveVoiceScaledSize(11));
+  }
+
+  private resolveVoiceMicButtonSize(): number {
+    return Math.max(46, this.resolveVoiceScaledSize(52));
+  }
+
+  private resolveVoiceToolButtonSize(): number {
+    return Math.max(34, this.resolveVoiceScaledSize(40));
+  }
+
+  private resolveVoiceToolSlotWidth(): number {
+    return Math.max(42, this.resolveVoiceScaledSize(48));
+  }
+
+  private resolveVoiceToolSidePadding(): number {
+    return Math.max(34, Math.round(this.resolveReferenceQwertyContentWidth() * 0.15));
+  }
+
+  private resolveVoiceCenteredX(width: number): number {
+    return Math.round((this.resolveReferenceQwertyContentWidth() - width) / 2);
+  }
+
+  private resolveVoiceToolCenterX(centerXRatio: number, width: number): number {
+    return Math.round(this.resolveReferenceQwertyContentWidth() * centerXRatio - width / 2);
+  }
+
   private resolveVoiceTextMaxWidth(): number {
-    return Math.max(168, Math.round(this.resolveReferenceQwertyContentWidth() * 0.62));
+    let contentWidth = this.resolveReferenceQwertyContentWidth();
+    return Math.max(200, Math.min(contentWidth - 28, Math.round(contentWidth * 0.84)));
+  }
+
+  private resolveVoicePreviewMaxWidth(): number {
+    let contentWidth = this.resolveReferenceQwertyContentWidth();
+    return Math.max(220, Math.min(contentWidth - 34, Math.round(contentWidth * 0.88)));
   }
 
   private resolveVoiceButtonColor(): string {
@@ -3159,6 +3475,110 @@ struct KeyboardPanel {
       return '#4B78FF';
     }
     return '#2F6BFF';
+  }
+
+  private resolveVoicePrimaryTitle(): ResourceStr {
+    if (this.isVoiceStatusPermissionDenied() || this.uiState.voiceState === 'error') {
+      return '语音输入异常';
+    }
+    if (this.containsVoiceStatusText('voice.translating')) {
+      return '正在翻译';
+    }
+    if (this.uiState.isPolishRunning ||
+      this.containsVoiceStatusText('voice.polishing') ||
+      this.containsVoiceStatusText('Polishing')) {
+      return $r('app.string.ime_voice_status_polishing');
+    }
+    if (this.uiState.voiceState === 'processing' || this.containsVoiceStatusText('voice.processing')) {
+      return $r('app.string.ime_voice_status_processing');
+    }
+    if (this.uiState.voiceState === 'recording') {
+      return '正在聆听';
+    }
+    if (this.uiState.voiceState === 'starting') {
+      return '语音启动中';
+    }
+    if (this.uiState.voiceState === 'stopped' && this.uiState.voiceTranscriptPreview.length > 0) {
+      return '语音输入完成';
+    }
+    return '语音输入开始';
+  }
+
+  private resolveVoiceSubtitle(): ResourceStr {
+    if (!this.uiState.voiceEnabled || this.isVoiceStatusUnavailable()) {
+      return '当前输入框不可用';
+    }
+    if (this.isVoiceStatusPermissionDenied()) {
+      return '请允许麦克风权限后重试';
+    }
+    if (this.isVoiceStatusNoSpeech()) {
+      return '未识别到声音，可重新录入';
+    }
+    if (this.containsVoiceStatusText('voice.translating')) {
+      return '请稍候，正在翻译文字';
+    }
+    if (this.uiState.isPolishRunning ||
+      this.uiState.voiceState === 'processing' ||
+      this.containsVoiceStatusText('voice.processing')) {
+      return '请稍候，正在整理文字';
+    }
+    if (this.uiState.voiceState === 'recording') {
+      return '再次点击按钮停止录音';
+    }
+    if (this.uiState.voiceState === 'starting') {
+      return '正在准备麦克风';
+    }
+    if (this.uiState.voiceTranscriptPreview.length > 0) {
+      return '可继续录音，或使用下方工具';
+    }
+    return '点击按钮开始说话';
+  }
+
+  private resolveVoiceSubtitleColor(): string {
+    if (this.isVoiceStatusPermissionDenied() || this.uiState.voiceState === 'error') {
+      return '#C94848';
+    }
+    return '#717A91';
+  }
+
+  private isVoiceToolBusy(): boolean {
+    return this.uiState.voiceState === 'starting' ||
+      this.uiState.voiceState === 'recording' ||
+      this.uiState.voiceState === 'processing' ||
+      this.uiState.isPolishRunning;
+  }
+
+  private resolveVoiceToolEnabled(action: VoiceToolAction): boolean {
+    if (action === 'polish' || action === 'translate') {
+      return this.uiState.polishEnabled && this.uiState.voiceDraftText.trim().length > 0 && !this.isVoiceToolBusy();
+    }
+    if (action === 'clear') {
+      return this.uiState.sessionActive || this.uiState.voiceTranscriptPreview.length > 0 || this.uiState.voiceDraftText.length > 0;
+    }
+    return !this.isVoiceToolBusy() && (this.uiState.canRevertPolish || this.uiState.sessionActive);
+  }
+
+  private handleVoiceToolAction(action: VoiceToolAction): void {
+    if (!this.resolveVoiceToolEnabled(action)) {
+      return;
+    }
+    if (action === 'polish') {
+      void imeRuntime.getSessionManager()?.polishPendingText();
+      return;
+    }
+    if (action === 'translate') {
+      void imeRuntime.getSessionManager()?.translatePendingText();
+      return;
+    }
+    if (action === 'clear') {
+      void imeRuntime.getSessionManager()?.clearEditorText();
+      return;
+    }
+    if (this.uiState.canRevertPolish) {
+      void imeRuntime.getSessionManager()?.revertLastPolish();
+      return;
+    }
+    this.handleBackspaceClick();
   }
 
   private resolveVoiceOuterPulseOpacity(): number {
@@ -4295,10 +4715,6 @@ struct KeyboardPanel {
   }
 
   private handlePrimaryToolbarAction(): void {
-    if (this.uiState.voiceDraftText.length > 0) {
-      void imeRuntime.getSessionManager()?.insertVoiceDraft();
-      return;
-    }
     if (this.uiState.showPolishSuggestion) {
       void imeRuntime.getSessionManager()?.acceptPolishSuggestion();
       return;
@@ -4309,21 +4725,16 @@ struct KeyboardPanel {
   }
 
   private canUsePrimaryAction(): boolean {
-    return this.uiState.voiceDraftText.length > 0 ||
-      this.uiState.showPolishSuggestion ||
+    return this.uiState.showPolishSuggestion ||
       this.uiState.candidates.length > 0;
   }
 
   private handleSendAction(): void {
-    if (this.uiState.voiceDraftText.length > 0) {
-      void imeRuntime.getSessionManager()?.insertVoiceDraft();
-      return;
-    }
     void imeRuntime.getSessionManager()?.pressEnter();
   }
 
   private canUseSendAction(): boolean {
-    return this.uiState.sessionActive || this.uiState.voiceDraftText.length > 0;
+    return this.uiState.sessionActive;
   }
 
   private resolveVoicePulseColor(): string {
@@ -4680,9 +5091,6 @@ struct KeyboardPanel {
   }
 
   private resolveComposeHeadline(): string {
-    if (this.uiState.voiceDraftText.length > 0) {
-      return this.uiState.voiceDraftText;
-    }
     if (this.uiState.preedit.length > 0) {
       return this.uiState.preedit;
     }
@@ -4696,9 +5104,6 @@ struct KeyboardPanel {
   }
 
   private resolveComposeSubline(): string {
-    if (this.uiState.voiceDraftText.length > 0) {
-      return '点 + 或 ↑ 直接插入草稿';
-    }
     if (this.uiState.showPolishSuggestion) {
       return '有润色建议待处理';
     }

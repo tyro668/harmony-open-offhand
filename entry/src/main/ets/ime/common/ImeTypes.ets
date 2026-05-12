@@ -173,6 +173,7 @@ export interface OffhandLlmPolishConfig {
   autoPolishVoiceResult: boolean;
   fallbackToLocalRewrite: boolean;
   style: string;
+  translateTargetLanguage: string;
   promptTemplate: string;
 }
 
@@ -203,6 +204,7 @@ export interface OffhandRuntimeSettings {
   llmPresetId: string;
   llmApiKey: string;
   llmStyle: string;
+  llmTranslateTargetLanguage: string;
   llmPromptTemplateMode: VoicePolishPromptMode;
   llmPromptTemplate: string;
   defaultEntryMode: string;

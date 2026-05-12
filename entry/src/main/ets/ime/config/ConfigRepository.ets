@@ -28,6 +28,10 @@ import {
   normalizeVoicePolishPromptTemplate,
   resolveVoicePolishPromptTemplate
 } from '../llm/DefaultPolishPrompt';
+import {
+  DEFAULT_VOICE_TRANSLATION_TARGET_LANGUAGE,
+  normalizeVoiceTranslationTarget
+} from '../llm/VoiceTranslationTarget';
 
 interface SubtypeEnvelope {
   subtypes: OffhandSubtypeConfig[];
@@ -347,6 +351,7 @@ function applyRuntimeSettings(base: OffhandImeConfig, runtime: OffhandRuntimeSet
   merged.llmPolish.apiKey = runtime.llmApiKey.trim();
   merged.llmPolish.autoPolishVoiceResult = autoVoicePolishEnabled;
   merged.llmPolish.style = runtime.llmStyle;
+  merged.llmPolish.translateTargetLanguage = normalizeVoiceTranslationTarget(runtime.llmTranslateTargetLanguage);
   merged.llmPolish.promptTemplate =
     resolveVoicePolishPromptTemplate(runtime.llmPromptTemplateMode, runtime.llmPromptTemplate);
   merged.privacy.enablePersonalization = runtime.enablePersonalization;
@@ -364,13 +369,14 @@ function createDefaultLlmPolishConfig(): OffhandLlmPolishConfig {
     apiModel: selection.preset.apiModel,
     protocol: selection.preset.protocol,
     endpoint: selection.preset.endpoint,
-    // 12s was too aggressive for SSE first-token latency against remote
-    // LLM gateways (observed 12s stream-timeout on GLM). Give the read
-    // timeout enough slack for first-token plus the slowest finish.
-    requestTimeoutMs: 45000,
+    // Long voice transcripts can take noticeably longer than short chat input
+    // to stream back from remote LLM gateways. Keep enough read-timeout slack
+    // for two-minute dictation without forcing the result down the fallback path.
+    requestTimeoutMs: 90000,
     autoPolishVoiceResult: true,
     fallbackToLocalRewrite: true,
     style: 'clean_conversational',
+    translateTargetLanguage: DEFAULT_VOICE_TRANSLATION_TARGET_LANGUAGE,
     promptTemplate: DEFAULT_VOICE_POLISH_PROMPT
   };
 }
@@ -505,6 +511,7 @@ function cloneConfig(source: OffhandImeConfig): OffhandImeConfig {
       autoPolishVoiceResult: source.llmPolish.autoPolishVoiceResult,
       fallbackToLocalRewrite: source.llmPolish.fallbackToLocalRewrite,
       style: source.llmPolish.style,
+      translateTargetLanguage: normalizeVoiceTranslationTarget(source.llmPolish.translateTargetLanguage),
       promptTemplate: normalizeVoicePolishPromptTemplate(source.llmPolish.promptTemplate)
     },
     privacy: {

@@ -86,10 +86,11 @@
     "apiModel": "kimi-k2.5",
     "protocol": "openai-compatible",
     "endpoint": "https://api.moonshot.cn/v1",
-    "requestTimeoutMs": 12000,
+    "requestTimeoutMs": 90000,
     "autoPolishVoiceResult": true,
     "fallbackToLocalRewrite": true,
-    "style": "clean_conversational"
+    "style": "clean_conversational",
+    "translateTargetLanguage": "en"
   },
   "privacy": {
     "enablePersonalization": true

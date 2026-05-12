@@ -920,205 +920,14 @@ export class SessionManager {
         return;
       }
 
-      this.pendingVoiceDraftText = transcript;
-      // Keep the raw transcript internal only: show it as a live preview in
-      // the voice panel, but do NOT surface the “语音草稿” confirmation card
-      // and do NOT insert it into the editor. The editor only ever receives
-      // the final LLM-polished text.
-      keyboardStateStore.patch({
-        voiceDraftText: '',
-        voiceTranscriptPreview: transcript
-      });
-
-      // Reload runtime settings right before polishing so any API key / model
-      // update made in the settings UIAbility after this IME session started
-      // is visible here. ConfigRepository.refreshRuntimeSettings is cheap
-      // (just a preferences read) and ensures we never use a stale apiKey.
-      if (this.context) {
-        try {
-          await this.configRepository.refreshRuntimeSettings(this.context);
-        } catch (error) {
-          hilog.warn(DOMAIN, TAG, 'refreshRuntimeSettings before polish failed: %{public}s',
-            (error as Error).message ?? String(error));
-        }
-      } else {
-        hilog.warn(DOMAIN, TAG, 'refreshRuntimeSettings before polish skipped: context missing');
-      }
-
-      let statusSource: string = result.source;
-      let llmConfig = this.configRepository.getConfig().llmPolish;
-      let streamedPolish = false;
-      let polishGateAutoPolishResult = voiceConfig.autoPolishResult;
-      let polishGateCapability = this.activeCapabilities?.polishEnabled === true;
-      let polishGateAutoPolishVoice = llmConfig.autoPolishVoiceResult;
-      let polishGateLlmEnabled = llmConfig.enabled;
-      let polishGateHasEndpoint = llmConfig.endpoint.length > 0;
-      let polishGateHasApiKey = llmConfig.apiKey !== undefined && llmConfig.apiKey.length > 0;
-      let polishGateHasApiModel = llmConfig.apiModel.length > 0;
-      hilog.info(DOMAIN, TAG,
-        'voice polish gate: voice.autoPolishResult=%{public}s capability.polishEnabled=%{public}s llm.autoPolishVoiceResult=%{public}s llm.enabled=%{public}s hasEndpoint=%{public}s hasApiKey=%{public}s hasApiModel=%{public}s providerId=%{public}s apiModel=%{public}s protocol=%{public}s restrictedReason=%{public}s',
-        String(polishGateAutoPolishResult),
-        String(polishGateCapability),
-        String(polishGateAutoPolishVoice),
-        String(polishGateLlmEnabled),
-        String(polishGateHasEndpoint),
-        String(polishGateHasApiKey),
-        String(polishGateHasApiModel),
-        llmConfig.providerId,
-        llmConfig.apiModel,
-        llmConfig.protocol,
-        this.activeCapabilities?.restrictedReason ?? 'n/a');
-      if (polishGateAutoPolishResult && polishGateCapability && polishGateAutoPolishVoice) {
-        keyboardStateStore.patch({
-          isPolishRunning: true,
-          voiceStatusText: 'voice.polishing',
-          statusText: 'LLM polishing voice transcript'
-        });
-
-        // Commit helper: only writes the final polished text into the
-        // editor. Streaming deltas only update the in-panel preview so the
-        // editor is never filled with intermediate text.
-        let displayedText = '';
-        let commitToEditor = async (nextText: string): Promise<boolean> => {
-          let editorAdapter = this.editorAdapter;
-          if (!editorAdapter) {
-            return false;
-          }
-          if (nextText === displayedText) {
-            return true;
-          }
-          let ok: boolean;
-          if (displayedText.length === 0) {
-            ok = await editorAdapter.insertText(nextText);
-          } else {
-            ok = await editorAdapter.replaceRecentText(displayedText, nextText);
-          }
-          if (ok) {
-            displayedText = nextText;
-            this.pendingVoiceDraftText = '';
-          }
-          return ok;
-        };
-        let streamSucceededWithText = false;
-        let onDeltaAsync = async (accumulated: string): Promise<void> => {
-          if (accumulated.length === 0) {
-            return;
-          }
-          // Stream deltas drive the in-panel preview/status only; the
-          // editor waits for the final polished result.
-          keyboardStateStore.patch({
-            voiceTranscriptPreview: accumulated,
-            voiceStatusText: accumulated
-          });
-        };
-        // Serialize delta→editor calls so a fast SSE stream doesn't overlap
-        // insert/replace operations on the InputClient.
-        let pendingDelta: Promise<void> = Promise.resolve();
-        try {
-          hilog.info(DOMAIN, TAG, 'voice polish: invoking streamPolishText transcriptLen=%{public}d',
-            transcript.length);
-          let polishResult = await this.llmPolishService.streamPolishText(llmConfig, {
-            text: transcript,
-            locale: this.currentSubtype.locale,
-            subtypeId: this.currentSubtype.id,
-            style: llmConfig.style
-          }, {
-            onDelta: (_delta: string, accumulated: string): void => {
-              pendingDelta = pendingDelta.then((): Promise<void> => onDeltaAsync(accumulated));
-            }
-          });
-          await pendingDelta;
-          hilog.info(DOMAIN, TAG,
-            'voice polish: stream returned source=%{public}s provider=%{public}s textLen=%{public}d displayedLen=%{public}d',
-            polishResult.source, polishResult.provider, polishResult.text.length, displayedText.length);
-
-          if (polishResult.text.length > 0) {
-            let ok = await commitToEditor(polishResult.text);
-            if (ok) {
-              streamSucceededWithText = true;
-            }
-          }
-          if (streamSucceededWithText && displayedText.length > 0) {
-            streamedPolish = true;
-            statusSource = polishResult.provider;
-            this.trackCommittedText(displayedText);
-            // Polished text is now in the host editor — remove the preview
-            // copy from the voice panel so the same string isn't shown in
-            // two places at once.
-            keyboardStateStore.patch({
-              voiceTranscriptPreview: ''
-            });
-          }
-        } catch (error) {
-          hilog.warn(DOMAIN, TAG, 'streamPolishText failed: %{public}s',
-            (error as Error).message ?? String(error));
-        }
-
-        // If streaming produced nothing (e.g. config missing or server hiccup)
-        // fall back to the non-streaming polish call and commit its result.
-        if (!streamedPolish) {
-          hilog.info(DOMAIN, TAG, 'voice polish: streaming produced no text, falling back to non-streaming polishText');
-          try {
-            let polishResult = await this.llmPolishService.polishText(llmConfig, {
-              text: transcript,
-              locale: this.currentSubtype.locale,
-              subtypeId: this.currentSubtype.id,
-              style: llmConfig.style
-            });
-            hilog.info(DOMAIN, TAG,
-              'voice polish: non-stream returned source=%{public}s provider=%{public}s textLen=%{public}d',
-              polishResult.source, polishResult.provider, polishResult.text.length);
-            if (polishResult.text.length > 0) {
-              let ok = await commitToEditor(polishResult.text);
-              if (ok) {
-                this.trackCommittedText(displayedText);
-                statusSource = polishResult.provider;
-                // Polished text is now in the host editor — remove the
-                // preview from the voice panel.
-                keyboardStateStore.patch({
-                  voiceTranscriptPreview: ''
-                });
-              } else {
-                hilog.warn(DOMAIN, TAG, 'voice polish: commit of non-streaming result failed');
-              }
-            }
-          } catch (error) {
-            hilog.warn(DOMAIN, TAG, 'voice polish fallback polishText failed: %{public}s',
-              (error as Error).message ?? String(error));
-          }
-        }
-
-        // Last-resort: both streaming and non-streaming polish produced no
-        // usable text. Do NOT auto-insert the raw ASR transcript — only the
-        // LLM-polished text is allowed to land in the editor. Surface the
-        // raw transcript as a manual voice draft so the user can still
-        // recover it from the panel if they want to.
-        if (displayedText.length === 0) {
-          hilog.warn(DOMAIN, TAG, 'voice polish: no polished text produced, keeping raw transcript as manual draft');
-          this.setVoiceDraftText(transcript);
-        }
-      } else {
-        hilog.info(DOMAIN, TAG, 'voice polish: skipped (gate closed)');
-        // Gate closed → no LLM polish is going to happen. Surface the raw
-        // transcript as a manual voice draft instead of silently inserting
-        // unpolished text into the editor.
-        this.setVoiceDraftText(transcript);
-      }
-
-      let hasPendingVoiceDraft = this.pendingVoiceDraftText.trim().length > 0;
+      this.setVoiceDraftText(transcript);
       keyboardStateStore.patch({
         isPolishRunning: false
       });
       keyboardStateStore.patch({
         voiceState: 'stopped',
         voiceStatusText: 'voice.stopped',
-        statusText: hasPendingVoiceDraft ?
-          (this.pendingPolishSuggestion ?
-            `Voice draft ready with suggestion (${statusSource})` :
-            `Voice draft ready (${statusSource})`) :
-          (this.pendingPolishSuggestion ?
-            `Voice result inserted with suggestion (${statusSource})` :
-            `Voice result inserted (${statusSource})`)
+        statusText: `Voice draft ready (${result.source})`
       });
       void ImeTelemetry.trackStatistic(
         'voice_complete',
@@ -1138,6 +947,10 @@ export class SessionManager {
 
   async polishPendingText(): Promise<void> {
     if (!this.editorAdapter || !this.currentSubtype || !this.activeCapabilities?.polishEnabled) {
+      return;
+    }
+    if (this.pendingVoiceDraftText.trim().length > 0) {
+      await this.applyVoiceDraftTransform('polish');
       return;
     }
     let sourceText = this.pendingPolishText.trim();
@@ -1173,7 +986,7 @@ export class SessionManager {
         replaced = await this.editorAdapter.replaceRecentText(sourceText, result.text);
       }
       if (replaced) {
-        this.trackCommittedText(result.text);
+        this.rememberManualRewrite(sourceText, result.text, result.provider);
       } else {
         hilog.warn(DOMAIN, TAG, 'polishPendingText: replaceRecentText failed');
       }
@@ -1182,7 +995,8 @@ export class SessionManager {
           `Polished (${result.provider})` :
           `Polish ready but apply failed (${result.provider})`,
         voiceTranscriptPreview: result.text,
-        isPolishRunning: false
+        isPolishRunning: false,
+        canRevertPolish: replaced ? true : this.lastAppliedPolish !== undefined
       });
       void ImeTelemetry.trackBehavior('polish_applied', `provider=${result.provider};transport=${result.source};source=manual;auto=true`);
     } catch (error) {
@@ -1190,6 +1004,154 @@ export class SessionManager {
       keyboardStateStore.patch({
         statusText: 'LLM polish failed',
         isPolishRunning: false
+      });
+    }
+  }
+
+  async translatePendingText(): Promise<void> {
+    if (!this.editorAdapter || !this.currentSubtype || !this.activeCapabilities?.polishEnabled) {
+      return;
+    }
+    if (this.pendingVoiceDraftText.trim().length > 0) {
+      await this.applyVoiceDraftTransform('translate');
+      return;
+    }
+    let sourceText = this.pendingPolishText.trim();
+    if (sourceText.length === 0) {
+      keyboardStateStore.patch({
+        statusText: 'No recent text available for translation'
+      });
+      return;
+    }
+    let llmConfig = this.configRepository.getConfig().llmPolish;
+    let translateTarget = llmConfig.translateTargetLanguage;
+    keyboardStateStore.patch({
+      isPolishRunning: true,
+      statusText: 'Translating recent text...'
+    });
+    try {
+      let result = await this.llmPolishService.polishText(llmConfig, {
+        text: sourceText,
+        locale: this.currentSubtype.locale,
+        subtypeId: this.currentSubtype.id,
+        style: `translate_${translateTarget}`,
+        translateTargetLanguage: translateTarget
+      });
+      if (result.text.length === 0 || result.text === sourceText) {
+        keyboardStateStore.patch({
+          statusText: `Translation finished without changes (${result.provider})`,
+          isPolishRunning: false
+        });
+        return;
+      }
+      let replaced = false;
+      if (this.editorAdapter) {
+        replaced = await this.editorAdapter.replaceRecentText(sourceText, result.text);
+      }
+      if (replaced) {
+        this.rememberManualRewrite(sourceText, result.text, result.provider);
+      } else {
+        hilog.warn(DOMAIN, TAG, 'translatePendingText: replaceRecentText failed');
+      }
+      keyboardStateStore.patch({
+        statusText: replaced ?
+          `Translated (${result.provider})` :
+          `Translation ready but apply failed (${result.provider})`,
+        voiceTranscriptPreview: result.text,
+        isPolishRunning: false,
+        canRevertPolish: replaced ? true : this.lastAppliedPolish !== undefined
+      });
+      void ImeTelemetry.trackBehavior('translate_applied', `provider=${result.provider};transport=${result.source};source=manual`);
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Translate failed: %{public}s', JSON.stringify(error));
+      keyboardStateStore.patch({
+        statusText: 'LLM translation failed',
+        isPolishRunning: false
+      });
+    }
+  }
+
+  private async applyVoiceDraftTransform(action: 'polish' | 'translate'): Promise<void> {
+    if (!this.editorAdapter || !this.currentSubtype || !this.activeCapabilities?.polishEnabled) {
+      return;
+    }
+    let sourceText = this.pendingVoiceDraftText.trim();
+    if (sourceText.length === 0) {
+      keyboardStateStore.patch({
+        statusText: 'No voice draft available'
+      });
+      return;
+    }
+    if (this.context) {
+      try {
+        await this.configRepository.refreshRuntimeSettings(this.context);
+      } catch (error) {
+        hilog.warn(DOMAIN, TAG, 'refreshRuntimeSettings before voice transform failed: %{public}s',
+          (error as Error).message ?? String(error));
+      }
+    }
+    let llmConfig = this.configRepository.getConfig().llmPolish;
+    let isTranslate = action === 'translate';
+    let translateTarget = llmConfig.translateTargetLanguage;
+    keyboardStateStore.patch({
+      isPolishRunning: true,
+      voiceStatusText: isTranslate ? 'voice.translating' : 'voice.polishing',
+      statusText: isTranslate ? 'Translating voice draft...' : 'Polishing voice draft...'
+    });
+    try {
+      let result = await this.llmPolishService.polishText(llmConfig, {
+        text: sourceText,
+        locale: this.currentSubtype.locale,
+        subtypeId: this.currentSubtype.id,
+        style: isTranslate ? `translate_${translateTarget}` : llmConfig.style,
+        translateTargetLanguage: isTranslate ? translateTarget : undefined
+      });
+      let resultText = result.text.trim();
+      if (isTranslate && (resultText.length === 0 || (resultText === sourceText && result.provider === '原文'))) {
+        keyboardStateStore.patch({
+          isPolishRunning: false,
+          voiceState: 'stopped',
+          voiceStatusText: 'voice.stopped',
+          statusText: `Translation unavailable (${result.provider})`
+        });
+        return;
+      }
+      let insertText = resultText.length > 0 ? resultText : sourceText;
+      let inserted = await this.editorAdapter.insertText(insertText);
+      if (!inserted) {
+        keyboardStateStore.patch({
+          isPolishRunning: false,
+          voiceState: 'stopped',
+          voiceStatusText: 'voice.stopped',
+          statusText: isTranslate ? 'Translation ready but insert failed' : 'Polish ready but insert failed'
+        });
+        return;
+      }
+      this.lastAppliedPolish = undefined;
+      this.pendingPolishSuggestion = undefined;
+      this.trackCommittedText(insertText);
+      this.clearVoiceDraftArtifacts();
+      keyboardStateStore.patch({
+        isPolishRunning: false,
+        voiceState: 'idle',
+        voiceStatusText: '',
+        statusText: isTranslate ? `Translated and inserted (${result.provider})` : `Polished and inserted (${result.provider})`,
+        showPolishSuggestion: false,
+        polishSourceText: '',
+        polishSuggestionText: '',
+        canRevertPolish: false
+      });
+      void ImeTelemetry.trackBehavior(
+        isTranslate ? 'voice_translate_inserted' : 'voice_polish_inserted',
+        `provider=${result.provider};transport=${result.source}`
+      );
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'Voice draft transform failed: %{public}s', JSON.stringify(error));
+      keyboardStateStore.patch({
+        isPolishRunning: false,
+        voiceState: 'stopped',
+        voiceStatusText: 'voice.stopped',
+        statusText: isTranslate ? 'LLM voice translation failed' : 'LLM voice polish failed'
       });
     }
   }
@@ -1874,6 +1836,19 @@ export class SessionManager {
     this.updatePolishAvailability();
   }
 
+  private rememberManualRewrite(sourceText: string, resultText: string, provider: string): void {
+    this.lastAppliedPolish = {
+      sourceText: sourceText,
+      suggestedText: resultText,
+      source: 'manual',
+      provider: provider
+    };
+    this.pendingPolishText = limitPolishBuffer(resultText);
+    this.recordLanguageModelCommit(resultText);
+    this.refreshAssociationCandidates();
+    this.updatePolishAvailability();
+  }
+
   private truncatePendingPolishText(length: number): void {
     if (length <= 0 || this.pendingPolishText.length === 0) {
       return;
@@ -2153,7 +2128,8 @@ export class SessionManager {
     this.pendingVoiceDraftText = text;
     keyboardStateStore.patch({
       voiceDraftText: text,
-      voiceTranscriptPreview: text
+      voiceTranscriptPreview: text,
+      canPolish: text.trim().length > 0
     });
   }
 
@@ -2171,7 +2147,8 @@ export class SessionManager {
       showPolishSuggestion: this.pendingPolishSuggestion !== undefined,
       polishSourceText: this.pendingPolishSuggestion ? this.pendingPolishSuggestion.sourceText : '',
       polishSuggestionText: this.pendingPolishSuggestion ? this.pendingPolishSuggestion.suggestedText : '',
-      canRevertPolish: this.lastAppliedPolish !== undefined
+      canRevertPolish: this.lastAppliedPolish !== undefined,
+      canPolish: this.pendingPolishText.trim().length > 0
     });
   }
 

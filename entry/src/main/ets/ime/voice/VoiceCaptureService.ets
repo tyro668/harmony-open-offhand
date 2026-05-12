@@ -37,7 +37,10 @@ const BUILTIN_ASR_FRAME_BYTES = 640;
 // extraParams.recognitionMode = 1 启用长语音连续识别，避免录音只能说一句话。
 const BUILTIN_ASR_RECOGNITION_MODE_LONG: number = 1;
 const BUILTIN_ASR_VAD_END_SILENCE_MS: number = 2000;
-const BUILTIN_ASR_MAX_AUDIO_MS: number = 60000;
+const BUILTIN_ASR_MAX_AUDIO_MS: number = 180000;
+const BUILTIN_ASR_SESSION_ROTATE_MS: number = 52000;
+const BUILTIN_ASR_FINISH_WAIT_MS: number = 6000;
+const BUILTIN_ASR_RESTART_WAIT_MS: number = 1500;
 
 interface SpeechRecognizerApi {
   createEngine(params: speechRecognizer.CreateEngineParams): Promise<speechRecognizer.SpeechRecognitionEngine>;
@@ -137,6 +140,10 @@ export class VoiceCaptureService {
   // incoming audio frames can be written to the engine immediately.
   private asrListening: boolean = false;
   private asrRestartScheduled: boolean = false;
+  private asrCompletionWaiter?: () => void;
+  private builtinSessionAudioBytes: number = 0;
+  private builtinSessionFinishPending: boolean = false;
+  private builtinSessionStartPending: boolean = false;
   private capturedFrameCount: number = 0;
   private capturedSampleCount: number = 0;
   private captureStartedAtMs: number = 0;
@@ -273,7 +280,6 @@ export class VoiceCaptureService {
       return this.resolveBuiltinAsrResult(config);
     }
     let capturer = this.capturer;
-    this.state.active = false;
     try {
       await capturer.stop();
     } catch (error) {
@@ -295,6 +301,7 @@ export class VoiceCaptureService {
     this.capturer = undefined;
 
     if (discardResult) {
+      this.state.active = false;
       return this.discardRecognitionSession();
     }
 
@@ -307,6 +314,7 @@ export class VoiceCaptureService {
       try {
         let result = await provider.stop(false);
         this.resetChunks();
+        this.state.active = false;
         return result;
       } catch (error) {
         hilog.warn(0xFF10, 'VoiceCaptureService', 'local ASR stop failed: %{public}s',
@@ -318,20 +326,23 @@ export class VoiceCaptureService {
     // 使用内置 ASR
     if (this.useBuiltinAsr && this.asrEngine) {
       try {
+        await this.prepareBuiltinAsrForStop();
         this.flushBuiltinAsrAudio();
+        let completionPromise = this.waitForBuiltinAsrCompletion(BUILTIN_ASR_FINISH_WAIT_MS);
         this.asrEngine.finish(this.asrSessionId);
-        // 等待 ASR 引擎返回最终结果
-        await new Promise<void>(resolve => setTimeout(resolve, 1500));
+        await completionPromise;
       } catch (error) {
         hilog.warn(0xFF10, 'VoiceCaptureService', 'builtin ASR finish error: %{public}s',
           (error as Error).message ?? String(error));
       }
+      this.state.active = false;
       return this.resolveBuiltinAsrResult(config);
     }
 
     let providerId = resolveAsrProviderId(config.asrProvider);
     if (providerId === 'builtin') {
       this.resetChunks();
+      this.state.active = false;
       return {
         text: '',
         source: 'builtin_asr'
@@ -341,6 +352,7 @@ export class VoiceCaptureService {
     // 远程 ASR 或 mock
     let pcmData = mergeChunks(this.state.chunks);
     this.resetChunks();
+    this.state.active = false;
     if ((providerId === 'auto' || providerId === 'remote') && config.asrEndpoint.length > 0 &&
       pcmData.byteLength > 0) {
       try {
@@ -808,6 +820,7 @@ export class VoiceCaptureService {
         // sessions so the first words after a pause are not dropped.
         this.asrListening = true;
         this.asrRestartScheduled = false;
+        this.builtinSessionStartPending = false;
         this.drainBufferedAudioToEngine();
       },
       onResult: (result: speechRecognizer.SpeechRecognitionResult): void => {
@@ -815,10 +828,16 @@ export class VoiceCaptureService {
       },
       onComplete: (_sessionId: string, _eventMessage: string): void => {
         this.asrListening = false;
+        this.builtinSessionStartPending = false;
+        this.builtinSessionFinishPending = false;
+        this.resolveBuiltinCompletionWaiter();
         this.maybeRestartBuiltinAsrAfterComplete('onComplete');
       },
       onError: (errorCode: number, errorMessage: string): void => {
         this.asrListening = false;
+        this.builtinSessionStartPending = false;
+        this.builtinSessionFinishPending = false;
+        this.resolveBuiltinCompletionWaiter();
         // 1002200010 = writeAudio 在未启动状态下被调用；engine 在长语音模式下仍可能主动停止，此处兜底重启
         if (this.state.active && this.useBuiltinAsr) {
           this.maybeRestartBuiltinAsrAfterComplete(`onError ${errorCode} ${errorMessage}`);
@@ -858,24 +877,24 @@ export class VoiceCaptureService {
       extraParams: extraParams
     };
     this.asrListening = false;
-    this.asrEngine.startListening(startParams);
+    this.builtinSessionStartPending = true;
+    this.builtinSessionAudioBytes = 0;
+    try {
+      this.asrEngine.startListening(startParams);
+    } catch (error) {
+      this.builtinSessionStartPending = false;
+      throw new Error((error as Error).message ?? String(error));
+    }
   }
 
   private handleBuiltinAsrResult(result: speechRecognizer.SpeechRecognitionResult): void {
-    let text = result.result ?? '';
-    if (result.isFinal) {
-      // 一句话的最终结果：累加到已定稿文本
-      if (text.length > 0) {
-        this.asrFinalizedText = this.asrFinalizedText.length > 0
-          ? `${this.asrFinalizedText}${text}`
-          : text;
-      }
+    let text = sanitizeTranscript(result.result ?? '');
+    if (result.isFinal || result.isLast) {
+      this.asrFinalizedText = mergeTranscriptText(this.asrFinalizedText, text);
       this.asrResultText = this.asrFinalizedText;
     } else {
       // 中间结果：作为预览附加在已定稿文本之后
-      this.asrResultText = this.asrFinalizedText.length > 0
-        ? `${this.asrFinalizedText}${text}`
-        : text;
+      this.asrResultText = mergeTranscriptText(this.asrFinalizedText, text);
     }
     // Built-in ASRKit may emit partial/final callbacks while the user is still
     // speaking. Keep those results internal and surface text only after stop().
@@ -887,7 +906,8 @@ export class VoiceCaptureService {
     }
     // Coalesce the overlapping onComplete / onEvent(3) / onError bursts that
     // the recognizer fires for a single VAD boundary into one restart.
-    if (this.asrRestartScheduled || this.asrListening) {
+    if (this.asrRestartScheduled || this.asrListening || this.builtinSessionStartPending ||
+      this.builtinSessionFinishPending) {
       return;
     }
     this.asrRestartScheduled = true;
@@ -910,8 +930,10 @@ export class VoiceCaptureService {
   }
 
   private resolveBuiltinAsrResult(config: OffhandVoiceConfig): VoiceRecognitionResult {
-    let result = this.asrResultText;
+    let result = this.asrFinalizedText.length > 0 ? this.asrFinalizedText : this.asrResultText;
     this.resetBuiltinAsrSessionState();
+    this.asrResultText = '';
+    this.asrFinalizedText = '';
     if (result.length > 0) {
       return { text: result, source: 'builtin_asr' };
     }
@@ -923,7 +945,11 @@ export class VoiceCaptureService {
     this.pendingBuiltinAudio = new Uint8Array(0);
     this.asrListening = false;
     this.asrRestartScheduled = false;
+    this.resolveBuiltinCompletionWaiter();
     this.asrSessionId = '';
+    this.builtinSessionAudioBytes = 0;
+    this.builtinSessionFinishPending = false;
+    this.builtinSessionStartPending = false;
   }
 
   private shutdownBuiltinAsr(): void {
@@ -953,6 +979,10 @@ export class VoiceCaptureService {
     }
     while (this.pendingBuiltinAudio.byteLength >= BUILTIN_ASR_FRAME_BYTES) {
       let frame = this.pendingBuiltinAudio.slice(0, BUILTIN_ASR_FRAME_BYTES);
+      if (this.shouldRotateBuiltinAsrSession(frame.byteLength)) {
+        this.finishBuiltinAsrSessionForRestart('session-audio-threshold');
+        return;
+      }
       try {
         this.asrEngine.writeAudio(this.asrSessionId, frame);
       } catch (error) {
@@ -964,6 +994,7 @@ export class VoiceCaptureService {
         return;
       }
       this.pendingBuiltinAudio = this.pendingBuiltinAudio.slice(BUILTIN_ASR_FRAME_BYTES);
+      this.builtinSessionAudioBytes += frame.byteLength;
     }
   }
 
@@ -971,10 +1002,123 @@ export class VoiceCaptureService {
     if (this.pendingBuiltinAudio.byteLength === 0) {
       return;
     }
+    if (!this.asrEngine || !this.asrListening) {
+      hilog.warn(0xFF10, 'VoiceCaptureService',
+        'builtin ASR flush skipped because engine is not listening pendingBytes=%{public}d',
+        this.pendingBuiltinAudio.byteLength);
+      return;
+    }
     let paddedFrame = new Uint8Array(BUILTIN_ASR_FRAME_BYTES);
     paddedFrame.set(this.pendingBuiltinAudio, 0);
-    this.asrEngine?.writeAudio(this.asrSessionId, paddedFrame);
+    try {
+      this.asrEngine.writeAudio(this.asrSessionId, paddedFrame);
+    } catch (error) {
+      hilog.warn(0xFF10, 'VoiceCaptureService',
+        'builtin ASR flush writeAudio failed: %{public}s',
+        (error as Error).message ?? String(error));
+      return;
+    }
     this.pendingBuiltinAudio = new Uint8Array(0);
+    this.builtinSessionAudioBytes += paddedFrame.byteLength;
+  }
+
+  private shouldRotateBuiltinAsrSession(nextFrameBytes: number): boolean {
+    if (this.builtinSessionAudioBytes <= 0 || this.asrSampleRate <= 0) {
+      return false;
+    }
+    let maxSessionBytes = Math.floor(this.asrSampleRate * 2 * BUILTIN_ASR_SESSION_ROTATE_MS / 1000);
+    return this.builtinSessionAudioBytes + nextFrameBytes > maxSessionBytes;
+  }
+
+  private finishBuiltinAsrSessionForRestart(reason: string): void {
+    if (!this.asrEngine || !this.asrListening || this.builtinSessionFinishPending) {
+      return;
+    }
+    let finishingSessionId = this.asrSessionId;
+    this.asrListening = false;
+    this.builtinSessionFinishPending = true;
+    hilog.info(0xFF10, 'VoiceCaptureService',
+      'finishing builtin ASR session for restart reason=%{public}s audioBytes=%{public}d',
+      reason, this.builtinSessionAudioBytes);
+    try {
+      this.asrEngine.finish(finishingSessionId);
+    } catch (error) {
+      this.builtinSessionFinishPending = false;
+      hilog.warn(0xFF10, 'VoiceCaptureService',
+        'finish builtin ASR session for restart failed: %{public}s',
+        (error as Error).message ?? String(error));
+      this.maybeRestartBuiltinAsrAfterComplete(`${reason}-finish-failed`);
+      return;
+    }
+    setTimeout((): void => {
+      if (this.state.active && this.useBuiltinAsr && !this.asrListening && !this.asrRestartScheduled &&
+        this.asrSessionId === finishingSessionId) {
+        this.builtinSessionFinishPending = false;
+        this.maybeRestartBuiltinAsrAfterComplete(`${reason}-timeout`);
+      }
+    }, BUILTIN_ASR_RESTART_WAIT_MS);
+  }
+
+  private async prepareBuiltinAsrForStop(): Promise<void> {
+    if (this.pendingBuiltinAudio.byteLength === 0 || this.asrListening) {
+      return;
+    }
+    if (this.builtinSessionStartPending) {
+      await this.waitForBuiltinAsrListening(BUILTIN_ASR_RESTART_WAIT_MS);
+      return;
+    }
+    if (!this.builtinSessionFinishPending && !this.asrRestartScheduled) {
+      this.maybeRestartBuiltinAsrAfterComplete('stop-pending-audio');
+    }
+    await this.waitForBuiltinAsrListening(BUILTIN_ASR_RESTART_WAIT_MS);
+  }
+
+  private async waitForBuiltinAsrListening(timeoutMs: number): Promise<void> {
+    let startMs = Date.now();
+    while (!this.asrListening && this.useBuiltinAsr && Date.now() - startMs < timeoutMs) {
+      await sleep(50);
+    }
+  }
+
+  private async waitForBuiltinAsrCompletion(timeoutMs: number): Promise<void> {
+    if (!this.asrEngine) {
+      return;
+    }
+    await new Promise<void>((resolve): void => {
+      let settled = false;
+      let complete = (): void => {};
+      let timerId = setTimeout((): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.asrCompletionWaiter === complete) {
+          this.asrCompletionWaiter = undefined;
+        }
+        resolve();
+      }, timeoutMs) as number;
+      complete = (): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timerId);
+        if (this.asrCompletionWaiter === complete) {
+          this.asrCompletionWaiter = undefined;
+        }
+        resolve();
+      };
+      this.asrCompletionWaiter = complete;
+    });
+  }
+
+  private resolveBuiltinCompletionWaiter(): void {
+    let waiter = this.asrCompletionWaiter;
+    if (!waiter) {
+      return;
+    }
+    this.asrCompletionWaiter = undefined;
+    waiter();
   }
 
   private async createCapturerWithFallback(sampleRate: audio.AudioSamplingRate): Promise<audio.AudioCapturer> {
@@ -1080,6 +1224,43 @@ function concatUint8Arrays(left: Uint8Array, right: Uint8Array): Uint8Array {
   merged.set(left, 0);
   merged.set(right, left.byteLength);
   return merged;
+}
+
+function sanitizeTranscript(text: string): string {
+  return text
+    .replace(/<\|[^>]+?\|>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function mergeTranscriptText(existingText: string, nextText: string): string {
+  let existing = sanitizeTranscript(existingText);
+  let next = sanitizeTranscript(nextText);
+  if (existing.length === 0) {
+    return next;
+  }
+  if (next.length === 0) {
+    return existing;
+  }
+  if (existing.indexOf(next) >= 0) {
+    return existing;
+  }
+  if (next.indexOf(existing) >= 0) {
+    return next;
+  }
+  let maxOverlap = Math.min(existing.length, next.length);
+  for (let length = maxOverlap; length > 0; length--) {
+    if (existing.substring(existing.length - length) === next.substring(0, length)) {
+      return `${existing}${next.substring(length)}`;
+    }
+  }
+  return `${existing}${next}`;
+}
+
+function sleep(timeoutMs: number): Promise<void> {
+  return new Promise<void>((resolve): void => {
+    setTimeout(resolve, timeoutMs);
+  });
 }
 
 function resolveSampleRate(sampleRate: number): audio.AudioSamplingRate {

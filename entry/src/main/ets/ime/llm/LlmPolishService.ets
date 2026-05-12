@@ -1,7 +1,8 @@
 import { RemoteHttpClient } from '../network/RemoteHttpClient';
 import { OffhandLlmPolishConfig } from '../common/ImeTypes';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { normalizeVoicePolishPromptTemplate } from './DefaultPolishPrompt';
+import { buildVoiceTranslationPrompt, normalizeVoicePolishPromptTemplate } from './DefaultPolishPrompt';
+import { resolveVoiceTranslationTarget } from './VoiceTranslationTarget';
 
 const DOMAIN = 0xFF10;
 const TAG = 'LlmPolishService';
@@ -11,6 +12,7 @@ export interface LlmPolishRequest {
   locale: string;
   subtypeId: string;
   style: string;
+  translateTargetLanguage?: string;
 }
 
 export interface LlmPolishResult {
@@ -31,6 +33,7 @@ interface OpenAiCompatibleMessage {
 interface OpenAiCompatibleRequest {
   model: string;
   temperature: number;
+  max_tokens?: number;
   messages: OpenAiCompatibleMessage[];
   stream?: boolean;
 }
@@ -89,11 +92,7 @@ export class LlmPolishService {
       hilog.warn(DOMAIN, TAG, 'polishText skipped remote call: endpoint or apiModel missing');
     }
     if (config.fallbackToLocalRewrite) {
-      return {
-        text: locallyPolishText(normalized),
-        source: 'local_fallback',
-        provider: '本地润色'
-      };
+      return buildLocalFallbackResult(config, normalized, request.style);
     }
     return {
       text: normalized,
@@ -129,8 +128,8 @@ export class LlmPolishService {
   // `callbacks.onDelta`. Resolves with the final LlmPolishResult (full
   // polished text) after the server's SSE stream ends. Falls back to the
   // non-streaming `polishText` path if the endpoint / API key is not
-  // configured, if streaming fails, or if the server emits no text deltas
-  // (so the caller always receives a usable final result).
+  // configured, if the server emits no text deltas, or via local/raw fallback
+  // if streaming fails (so the caller always receives a usable final result).
   async streamPolishText(config: OffhandLlmPolishConfig, request: LlmPolishRequest,
     callbacks: LlmStreamCallbacks): Promise<LlmPolishResult> {
     let normalized = request.text.trim();
@@ -148,8 +147,8 @@ export class LlmPolishService {
       String(canStream), config.endpoint, config.apiModel, config.protocol,
       String(config.apiKey !== undefined && config.apiKey.length > 0), normalized.length);
     if (canStream) {
+      let accumulated = '';
       try {
-        let accumulated = '';
         let lineCount = 0;
         let onLine = (line: string): void => {
           lineCount += 1;
@@ -184,9 +183,9 @@ export class LlmPolishService {
         hilog.info(DOMAIN, TAG,
           'streamPolishText stream done: lines=%{public}d accumulatedLen=%{public}d',
           lineCount, accumulated.length);
-        if (accumulated.length > 0) {
+        if (accumulated.trim().length > 0) {
           return {
-            text: accumulated,
+            text: accumulated.trim(),
             source: 'remote_llm',
             provider: buildProviderLabel(config)
           };
@@ -194,7 +193,7 @@ export class LlmPolishService {
       } catch (error) {
         hilog.warn(DOMAIN, TAG, 'streamPolishText stream failed: %{public}s',
           (error as Error).message ?? String(error));
-        // fall through to non-streaming polish below
+        return buildLocalFallbackResult(config, normalized, request.style);
       }
     }
     return this.polishText(config, request);
@@ -224,7 +223,7 @@ function parseStreamLineDelta(line: string, protocol: string): string {
     if (type === 'content_block_delta' || type === 'message_delta' || type.length === 0) {
       let delta = readObjectValue(parsed, 'delta');
       if (delta) {
-        let text = readStringValue(delta, 'text');
+        let text = readStringValuePreserveWhitespace(delta, 'text');
         if (text.length > 0) {
           return text;
         }
@@ -240,14 +239,14 @@ function parseStreamLineDelta(line: string, protocol: string): string {
   let firstChoice = choices[0];
   let delta = readObjectValue(firstChoice, 'delta');
   if (delta) {
-    let content = readStringValue(delta, 'content');
+    let content = readStringValuePreserveWhitespace(delta, 'content');
     if (content.length > 0) {
       return content;
     }
   }
   let message = readObjectValue(firstChoice, 'message');
   if (message) {
-    let content = readStringValue(message, 'content');
+    let content = readStringValuePreserveWhitespace(message, 'content');
     if (content.length > 0) {
       return content;
     }
@@ -257,11 +256,12 @@ function parseStreamLineDelta(line: string, protocol: string): string {
 
 function buildOpenAiCompatiblePayload(config: OffhandLlmPolishConfig, request: LlmPolishRequest,
   stream: boolean = false): OpenAiCompatibleRequest {
-  let systemPrompt = buildSystemPrompt(config.promptTemplate);
+  let systemPrompt = buildSystemPrompt(config.promptTemplate, request);
   let userPrompt = buildUserPrompt(request);
   let payload: OpenAiCompatibleRequest = {
     model: config.apiModel,
     temperature: 0.2,
+    max_tokens: resolvePolishMaxTokens(request.text),
     messages: [
       {
         role: 'system',
@@ -283,8 +283,8 @@ function buildAnthropicCompatiblePayload(config: OffhandLlmPolishConfig, request
   stream: boolean = false): AnthropicCompatibleRequest {
   let payload: AnthropicCompatibleRequest = {
     model: config.apiModel,
-    system: buildSystemPrompt(config.promptTemplate),
-    max_tokens: 1024,
+    system: buildSystemPrompt(config.promptTemplate, request),
+    max_tokens: resolvePolishMaxTokens(request.text),
     temperature: 0.2,
     messages: [
       {
@@ -304,11 +304,20 @@ function buildAnthropicCompatiblePayload(config: OffhandLlmPolishConfig, request
   return payload;
 }
 
-function buildSystemPrompt(promptTemplate: string): string {
+function buildSystemPrompt(promptTemplate: string, request: LlmPolishRequest): string {
+  if (isTranslateStyle(request.style)) {
+    let target = resolveVoiceTranslationTarget(request.translateTargetLanguage ??
+      resolveTranslateTargetLanguageFromStyle(request.style));
+    return buildVoiceTranslationPrompt(target.promptName);
+  }
   return normalizeVoicePolishPromptTemplate(promptTemplate);
 }
 
 function buildUserPrompt(request: LlmPolishRequest): string {
+  if (isTranslateStyle(request.style)) {
+    let target = resolveVoiceTranslationTarget(request.translateTargetLanguage ?? resolveTranslateTargetLanguageFromStyle(request.style));
+    return `目标语言：${target.promptName}\n待处理语音转写文本：\n${request.text.trim()}`;
+  }
   return request.text.trim();
 }
 
@@ -442,6 +451,12 @@ function readStringValue(source: Object, key: string): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function readStringValuePreserveWhitespace(source: Object, key: string): string {
+  let record = source as Record<string, Object | string | number | boolean | undefined>;
+  let value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
 function readObjectValue(source: Object, key: string): Object | undefined {
   let record = source as Record<string, Object | string | number | boolean | undefined>;
   let value = record[key];
@@ -479,6 +494,61 @@ function buildProviderLabel(config: OffhandLlmPolishConfig): string {
     return config.providerName;
   }
   return '远端模型';
+}
+
+function buildLocalFallbackResult(config: OffhandLlmPolishConfig, normalizedText: string,
+  style: string = ''): LlmPolishResult {
+  if (isTranslateStyle(style)) {
+    return {
+      text: normalizedText,
+      source: 'local_fallback',
+      provider: '原文'
+    };
+  }
+  if (config.fallbackToLocalRewrite) {
+    let localText = locallyPolishText(normalizedText);
+    return {
+      text: localText.length > 0 ? localText : normalizedText,
+      source: 'local_fallback',
+      provider: '本地润色'
+    };
+  }
+  return {
+    text: normalizedText,
+    source: 'local_fallback',
+    provider: '原文'
+  };
+}
+
+function resolvePolishMaxTokens(text: string): number {
+  let estimated = Math.ceil(text.trim().length * 1.5) + 256;
+  return clampNumber(estimated, 1024, 4096);
+}
+
+function isTranslateStyle(style: string): boolean {
+  return style === 'translate_zh_en' || style.startsWith('translate_');
+}
+
+function resolveTranslateTargetLanguageFromStyle(style: string): string {
+  if (!isTranslateStyle(style)) {
+    return '';
+  }
+  let prefix = 'translate_';
+  if (!style.startsWith(prefix)) {
+    return '';
+  }
+  let target = style.substring(prefix.length);
+  if (target === 'zh_en') {
+    return 'en';
+  }
+  return target;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.floor(value)));
 }
 
 function locallyPolishText(text: string): string {
